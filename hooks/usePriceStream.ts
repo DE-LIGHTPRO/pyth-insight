@@ -4,8 +4,8 @@ import { useEffect } from "react";
 import { usePriceStore } from "@/lib/stores/priceStore";
 
 /**
- * Initialises the Pyth Hermes SSE stream and cleans up on unmount.
- * Safe to call from multiple components — the store prevents double-init.
+ * Initialises the Pyth Hermes REST polling loop (500ms interval) and cleans up on unmount.
+ * Safe to call from multiple components — the store singleton prevents double-init.
  */
 export function usePriceStream() {
   const initStream = usePriceStore((s) => s.initStream);
