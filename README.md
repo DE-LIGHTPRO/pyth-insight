@@ -12,7 +12,7 @@
 
 Pyth Insight turns raw oracle data into actionable intelligence. It is not a price ticker — it is an analytical layer on top of Pyth's real-time price feeds that surfaces what the data is actually saying about market conditions, confidence, and statistical reliability.
 
-**Live Price Feeds** — 20 crypto assets streaming directly from Pyth Hermes at sub-second intervals. Each feed displays the price, confidence interval (CI), CI width as a percentage, EMA deviation, and a real-time quality classification (tight / normal / wide / extreme).
+**Live Price Feeds** — 18 crypto assets polled directly from Pyth Hermes at 500ms intervals. Each feed displays the price, confidence interval (CI), CI width as a percentage, EMA deviation, and a real-time quality classification (tight / normal / wide / extreme).
 
 **CI Calibration Analysis** *(flagship)* — Tests whether Pyth's published confidence intervals are statistically accurate. A correctly calibrated ±1σ CI should contain the true price 68.3% of the time; ±2σ should contain it 95.4%. This page runs that test against historical data from the Pyth Benchmarks API and shows whether the oracle is over- or under-confident — information that is directly useful for DeFi protocols relying on Pyth for risk calculations.
 
@@ -26,10 +26,10 @@ Pyth Insight turns raw oracle data into actionable intelligence. It is not a pri
 
 | Feature | Pyth API Used |
 |---|---|
-| Live price streaming | Hermes SSE (`/v2/updates/price/stream`) |
-| Initial price snapshot | Hermes REST (`/v2/updates/price/latest`) |
+| Live price feeds (500ms polling) | Hermes REST (`/v2/updates/price/latest`) |
 | Historical calibration data | Pyth Benchmarks API (`benchmarks.pyth.network`) |
-| Feed metadata | `@pythnetwork/hermes-client` SDK |
+| Feed metadata & SDK | `@pythnetwork/hermes-client` |
+| AI data layer (March 2+) | Pyth MCP Server (with direct-API fallback) |
 
 All price feeds use official feed IDs from [pyth.network/price-feeds](https://pyth.network/price-feeds).
 
@@ -79,7 +79,7 @@ components/
   PriceFeedGrid             Sortable, filterable feed grid
   PythLogo                  Official Pyth Network SVG mark
 lib/
-  pyth/hermes.ts            Hermes SSE + REST integration
+  pyth/hermes.ts            Hermes REST integration + types
   pyth/benchmarks.ts        Benchmarks API (historical data)
   pyth/price-ids.ts         Official Pyth feed ID registry
   stores/priceStore.ts      Zustand live price state
