@@ -19,7 +19,7 @@ export default function FeedsPage() {
           </div>
           <h1 className="text-2xl font-bold text-white">Live Price Feeds</h1>
           <p className="text-slate-400 text-sm mt-1 max-w-xl">
-            Real-time prices for 19 assets polled directly from Pyth Hermes at 500ms intervals.
+            Real-time prices for 18 assets polled directly from Pyth Hermes at 500ms intervals.
             Each card shows the live price, confidence interval (±CI), and CI width as a
             percentage — a narrower CI means the oracle is more certain of the price.
           </p>

@@ -159,7 +159,7 @@ export default function Home() {
       {/* ── Stats bar ─────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-3 gap-px rounded-xl overflow-hidden border border-white/8 bg-white/8 mb-16">
         {[
-          { value: "19",      label: "Live assets"          },
+          { value: "18",      label: "Live assets"          },
           { value: "500ms",   label: "Price update interval" },
           { value: "0–100",   label: "Calibration score"     },
         ].map((s) => (
@@ -188,7 +188,7 @@ export default function Home() {
           iconBg="bg-cyan-950/60"
           iconColor="text-cyan-400"
           title="Live Price Feeds"
-          description="Real-time prices for 19 assets streamed from Pyth Hermes at 500ms intervals. Each card shows live confidence intervals and oracle certainty in real time."
+          description="Real-time prices for 18 assets streamed from Pyth Hermes at 500ms intervals. Each card shows live confidence intervals and oracle certainty in real time."
           href="/dashboard/feeds"
           tag="Pyth Hermes"
           tagColor="text-cyan-400"

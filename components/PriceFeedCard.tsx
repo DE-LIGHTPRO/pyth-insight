@@ -17,15 +17,14 @@ const ASSET_META: Record<string, { icon: string; color: string; bg: string }> = 
   "SOL/USD":   { icon: `${CDN}/sol.svg`,   color: "text-purple-400", bg: "bg-purple-950/50" },
   "BNB/USD":   { icon: `${CDN}/bnb.svg`,   color: "text-yellow-400", bg: "bg-yellow-950/50" },
   "AVAX/USD":  { icon: `${CDN}/avax.svg`,  color: "text-red-400",    bg: "bg-red-950/50"    },
-  // MATIC → POL rebrand 2024; matic.svg icon still works visually for POL
-  "POL/USD":   { icon: `${CDN}/matic.svg`, color: "text-violet-400", bg: "bg-violet-950/50" },
+  // POL/USD removed — feed ID was malformed (63 chars instead of 64); pending re-verification
   "ARB/USD":   { icon: `${CDN}/arb.svg`,   color: "text-sky-400",    bg: "bg-sky-950/50"    },
   "OP/USD":    { icon: `${CDN}/op.svg`,    color: "text-rose-400",   bg: "bg-rose-950/50"   },
   "LINK/USD":  { icon: `${CDN}/link.svg`,  color: "text-blue-300",   bg: "bg-blue-950/50"   },
   "UNI/USD":   { icon: `${CDN}/uni.svg`,   color: "text-pink-400",   bg: "bg-pink-950/50"   },
   "AAVE/USD":  { icon: `${CDN}/aave.svg`,  color: "text-purple-300", bg: "bg-purple-950/50" },
   "CRV/USD":   { icon: `${CDN}/crv.svg`,   color: "text-yellow-300", bg: "bg-yellow-950/50" },
-  "MKR/USD":   { icon: `${CDN}/mkr.svg`,   color: "text-teal-400",   bg: "bg-teal-950/50"   },
+  // MKR/USD deprecated on Hermes — removed
   "SNX/USD":   { icon: `${CDN}/snx.svg`,   color: "text-cyan-400",   bg: "bg-cyan-950/50"   },
   "DOGE/USD":  { icon: `${CDN}/doge.svg`,  color: "text-yellow-400", bg: "bg-yellow-950/50" },
   "LTC/USD":   { icon: `${CDN}/ltc.svg`,   color: "text-slate-300",  bg: "bg-slate-800/50"  },

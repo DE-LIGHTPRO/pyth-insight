@@ -45,16 +45,11 @@ interface PriceStore {
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // ── URL builder ───────────────────────────────────────────────────────────────
-// Use URLSearchParams so brackets are correctly encoded as %5B%5D,
-// matching the format the Hermes API expects.
+// NOTE: Do NOT use URLSearchParams for ids[] — it percent-encodes [ and ] to
+// %5B and %5D which Hermes does not recognise. Build the query string manually.
 function buildRestURL(): string {
-  const params = new URLSearchParams();
-  RAW_IDS.forEach((id) => params.append("ids[]", id));
-  params.set("parsed", "true");
-  // Safety net: skip any IDs that may have been deprecated/renamed on Hermes
-  // rather than failing the entire batch request
-  params.set("ignore_invalid_price_ids", "true");
-  return `${HERMES_BASE}/v2/updates/price/latest?${params.toString()}`;
+  const idsStr = RAW_IDS.map((id) => `ids[]=${id}`).join("&");
+  return `${HERMES_BASE}/v2/updates/price/latest?${idsStr}&parsed=true&ignore_invalid_price_ids=true`;
 }
 
 // ── Price parser ──────────────────────────────────────────────────────────────
