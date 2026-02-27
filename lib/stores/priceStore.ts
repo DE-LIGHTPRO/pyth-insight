@@ -123,42 +123,109 @@ export const usePriceStore = create<PriceStore>((set, get) => ({
 
     set({ status: "connecting" });
 
-    try {
-      // ── Step 1: Discover all available feeds ────────────────────────────────
-      const res = await fetch("/api/feeds");
-      if (!res.ok) throw new Error(`/api/feeds returned ${res.status}`);
+    // ── Shared tick factory — used in both phases ──────────────────────────────
+    const tick = (batchIds: string[]) => () => {
+      fetchBatch(batchIds, feedMeta)
+        .then((parsed) => {
+          get()._applyUpdates(parsed, feedMeta);
+          if (get().status !== "connected") set({ status: "connected" });
+        })
+        .catch((err: Error) => {
+          console.error("[PriceStore] batch error:", err.message);
+          if (get().status !== "connected") set({ status: "error" });
+        });
+    };
 
-      const allFeeds: FeedMeta[] = await res.json();
+    // ── Feed catalogue transform (mirrors /api/feeds logic) ───────────────────
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const transformFeeds = (raw: any[]): FeedMeta[] =>
+      raw
+        .map((f) => {
+          const attr = f.attributes ?? {};
+          const sym  = attr.display_symbol ?? attr.description ?? attr.symbol ?? f.id;
+          const base = attr.base ?? (sym as string).split("/")[0];
+          return {
+            id:            (f.id as string).replace(/^0x/, ""),
+            symbol:        sym,
+            pythSymbol:    attr.symbol ?? sym,
+            assetType:     ((attr.asset_type ?? "other") as string).toLowerCase(),
+            base,
+            quoteCurrency: attr.quote_currency ?? "USD",
+            description:   attr.description ?? sym,
+          } satisfies FeedMeta;
+        })
+        .filter((f) => f.quoteCurrency === "USD" || f.symbol.endsWith("/USD"))
+        .sort((a, b) => {
+          if (a.assetType !== b.assetType) {
+            const order: Record<string, number> = { crypto: 0, fx: 1, metal: 2, equity: 3 };
+            return (order[a.assetType] ?? 9) - (order[b.assetType] ?? 9);
+          }
+          return a.symbol.localeCompare(b.symbol);
+        });
 
-      // Build id → FeedMeta lookup
-      feedMeta = new Map(allFeeds.map((f) => [f.id, f]));
-
-      set({ feeds: allFeeds });
-
-      // ── Step 2: Batch the IDs ──────────────────────────────────────────────
-      const allIds    = allFeeds.map((f) => f.id);
-      const batches   = chunks(allIds, BATCH_SIZE);
-
-      // ── Step 3: Poll every batch ───────────────────────────────────────────
-      const tick = (batchIds: string[]) => () => {
-        fetchBatch(batchIds, feedMeta)
-          .then((parsed) => {
-            get()._applyUpdates(parsed, feedMeta);
-            if (get().status !== "connected") set({ status: "connected" });
-          })
-          .catch((err: Error) => {
-            console.error("[PriceStore] batch error:", err.message);
-            if (get().status !== "connected") set({ status: "error" });
-          });
-      };
-
-      // Fire first tick for each batch staggered by 200ms — spreads the burst
-      // across 19 × 200ms = 3.8s so all 19 first-requests don't fire at once.
-      batches.forEach((batch, i) => {
-        setTimeout(tick(batch), i * 200);
-        const t = setInterval(tick(batch), POLL_MS);
-        pollTimers.push(t);
+    // ── Start polling a list of feeds ─────────────────────────────────────────
+    const startPolling = (ids: string[], staggerMs = 200) => {
+      chunks(ids, BATCH_SIZE).forEach((batch, i) => {
+        setTimeout(tick(batch), i * staggerMs);
+        pollTimers.push(setInterval(tick(batch), POLL_MS));
       });
+    };
+
+    try {
+      // ── PHASE 1: Serve from localStorage cache if fresh ───────────────────
+      //    Eliminates the Hermes roundtrip on repeat visits entirely.
+      const CACHE_KEY = "pyth_feeds_v3";
+      const CACHE_TTL = 3_600_000; // 1 hour
+
+      let cachedFeeds: FeedMeta[] | null = null;
+      try {
+        const raw = localStorage.getItem(CACHE_KEY);
+        if (raw) {
+          const { data, ts } = JSON.parse(raw) as { data: FeedMeta[]; ts: number };
+          if (Date.now() - ts < CACHE_TTL) cachedFeeds = data;
+        }
+      } catch { /* localStorage blocked (private mode / quota) — ignore */ }
+
+      if (cachedFeeds) {
+        // Instant: feed catalogue already in memory from cache
+        feedMeta = new Map(cachedFeeds.map((f) => [f.id, f]));
+        set({ feeds: cachedFeeds });
+        startPolling(cachedFeeds.map((f) => f.id));
+
+        // Background refresh so cache stays warm
+        fetch(`${HERMES_BASE}/v2/price_feeds`, { headers: { Accept: "application/json" } })
+          .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .then((raw: any[]) => {
+            const fresh = transformFeeds(raw);
+            try { localStorage.setItem(CACHE_KEY, JSON.stringify({ data: fresh, ts: Date.now() })); } catch { /* ignore */ }
+          })
+          .catch(() => { /* background refresh failed — cached data still in use */ });
+
+        return;
+      }
+
+      // ── PHASE 2: No cache — call Hermes directly (bypass Next.js proxy) ────
+      //    The browser already has a direct connection to hermes.pyth.network
+      //    for price polling; reusing it here avoids the Vercel serverless
+      //    cold-start + proxy roundtrip (saves ~1–3 s on first load).
+      const res = await fetch(`${HERMES_BASE}/v2/price_feeds`, {
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(`Hermes price_feeds returned ${res.status}`);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const raw: any[] = await res.json();
+      const allFeeds   = transformFeeds(raw);
+
+      // Persist to localStorage so next visit is instant
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ data: allFeeds, ts: Date.now() }));
+      } catch { /* quota exceeded — ignore */ }
+
+      feedMeta = new Map(allFeeds.map((f) => [f.id, f]));
+      set({ feeds: allFeeds });
+      startPolling(allFeeds.map((f) => f.id));
 
     } catch (err) {
       console.error("[PriceStore] init error:", err);
