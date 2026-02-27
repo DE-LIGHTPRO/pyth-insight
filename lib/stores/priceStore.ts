@@ -172,11 +172,19 @@ export const usePriceStore = create<PriceStore>((set, get) => ({
 
   _applyUpdates: (incoming, meta) => {
     set((state) => {
-      const now     = Date.now();
-      const updated = { ...state.prices };
+      const now       = Date.now();
+      const nowSecs   = Math.floor(now / 1000);
+      const MAX_AGE   = 3600; // discard feeds not updated within the last hour
+      const updated   = { ...state.prices };
 
       incoming.forEach((p) => {
         if (!p.symbol || p.symbol.includes("…")) return;
+        // Skip feeds with stale publish times — these are Pyth Pro-only feeds
+        // (e.g. equities) that don't publish to the free Hermes public endpoint
+        if (nowSecs - p.publishTime > MAX_AGE) return;
+        // Skip feeds with zero price (unpublished / no data)
+        if (p.price === 0) return;
+
         const feed      = meta.get(p.id.replace(/^0x/, ""));
         const prev      = updated[p.symbol] ?? null;
         const prevPrice = prev?.price ?? null;

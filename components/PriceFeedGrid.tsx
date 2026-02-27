@@ -16,12 +16,15 @@ const SORT_LABELS: Record<SortKey, string> = {
 
 // Asset type filter tabs
 const TYPE_FILTERS = [
-  { key: "all",    label: "All" },
-  { key: "crypto", label: "Crypto" },
-  { key: "fx",     label: "Forex" },
-  { key: "metal",  label: "Metals" },
+  { key: "all",    label: "All"      },
+  { key: "crypto", label: "Crypto"   },
+  { key: "fx",     label: "Forex"    },
+  { key: "metal",  label: "Metals"   },
   { key: "equity", label: "Equities" },
 ];
+
+// Equities are only available via Pyth Pro (not the public Hermes endpoint)
+const EQUITY_COUNT_IN_CATALOGUE = 1100; // approx from /v2/price_feeds catalogue
 
 export default function PriceFeedGrid() {
   const { status, totalUpdates } = usePriceStream();
@@ -150,8 +153,41 @@ export default function PriceFeedGrid() {
         </div>
       )}
 
+      {/* Pyth Pro teaser — shown when Equities tab is selected */}
+      {filterType === "equity" && (
+        <div className="rounded-xl border border-purple-800/40 bg-purple-950/20 p-8 text-center">
+          <div className="inline-flex items-center gap-2 bg-purple-900/40 border border-purple-700/50 rounded-full px-4 py-1.5 mb-4">
+            <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+            <span className="text-xs font-semibold text-purple-300 tracking-wide uppercase">Pyth Pro</span>
+          </div>
+          <h3 className="text-lg font-bold text-white mb-2">
+            {EQUITY_COUNT_IN_CATALOGUE}+ Equity Feeds Available via Pyth Pro
+          </h3>
+          <p className="text-slate-400 text-sm max-w-lg mx-auto mb-6 leading-relaxed">
+            Pyth Pro delivers real-time US equities, ETFs, and international indices at
+            sub-millisecond latency — 2,200+ feeds total including the ones in this catalogue.
+            Equity feeds require a Pyth Pro subscription and are not published to the free
+            public Hermes endpoint.
+          </p>
+          <div className="flex flex-wrap justify-center gap-2 mb-6 text-xs text-slate-500">
+            {["AAPL/USD","TSLA/USD","NVDA/USD","MSFT/USD","AMZN/USD","GOOGL/USD","META/USD","SPY/USD","QQQ/USD","GLD/USD"].map((sym) => (
+              <span key={sym} className="px-2 py-1 rounded bg-white/5 border border-white/8 font-mono text-slate-400">{sym}</span>
+            ))}
+            <span className="px-2 py-1 rounded bg-white/5 border border-white/8 text-slate-500">+ 1,090 more</span>
+          </div>
+          <a
+            href="https://docs.pyth.network/price-feeds/pro"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-purple-700 hover:bg-purple-600 text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            Learn about Pyth Pro →
+          </a>
+        </div>
+      )}
+
       {/* Price grid */}
-      {connected > 0 && (
+      {connected > 0 && filterType !== "equity" && (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             {filtered.map((p) => (
