@@ -1,11 +1,13 @@
 "use client";
 
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useEffect } from "react";
+import { usePriceStore }  from "@/lib/stores/priceStore";
+import { usePriceStream } from "@/hooks/usePriceStream";
+import PriceFeedCard       from "@/components/PriceFeedCard";
 
-const PAGE_SIZE = 60; // cards rendered per page — keeps DOM lean and browser fast
-import { usePriceStore }     from "@/lib/stores/priceStore";
-import { usePriceStream }    from "@/hooks/usePriceStream";
-import PriceFeedCard          from "@/components/PriceFeedCard";
+// ── Constants (must be after all imports) ─────────────────────────────────────
+
+const PAGE_SIZE = 60; // max cards rendered per page — keeps DOM lean
 
 type SortKey = "symbol" | "price" | "conf" | "change";
 
@@ -16,7 +18,6 @@ const SORT_LABELS: Record<SortKey, string> = {
   change: "Change",
 };
 
-// Asset type filter tabs
 const TYPE_FILTERS = [
   { key: "all",    label: "All"      },
   { key: "crypto", label: "Crypto"   },
@@ -25,8 +26,9 @@ const TYPE_FILTERS = [
   { key: "equity", label: "Equities" },
 ];
 
-// Equities are only available via Pyth Pro (not the public Hermes endpoint)
-const EQUITY_COUNT_IN_CATALOGUE = 1100; // approx from /v2/price_feeds catalogue
+const EQUITY_COUNT_IN_CATALOGUE = 1100;
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function PriceFeedGrid() {
   const { status, totalUpdates } = usePriceStream();
@@ -39,16 +41,15 @@ export default function PriceFeedGrid() {
   const setFilterType = usePriceStore((s) => s.setFilterType);
   const getSorted     = usePriceStore((s) => s.getSortedPrices);
 
-  const [search,      setSearch]      = useState("");
+  const [search,       setSearch]       = useState("");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   const loadMore = useCallback(() => setVisibleCount((n) => n + PAGE_SIZE), []);
 
   const sortedPrices = getSorted();
 
+  // Pure derivation — no side effects inside useMemo
   const filtered = useMemo(() => {
-    // Reset pagination whenever the filtered set changes
-    setVisibleCount(PAGE_SIZE);
     if (!search) return sortedPrices;
     const q = search.toLowerCase();
     return sortedPrices.filter(
@@ -56,10 +57,14 @@ export default function PriceFeedGrid() {
     );
   }, [sortedPrices, search]);
 
-  const connected = Object.keys(prices).length;
+  // Reset pagination whenever the result set changes (filter tab or search)
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [filterType, search]);
+
+  const connected  = Object.keys(prices).length;
   const totalFeeds = feeds.length;
 
-  // Count per asset type (for tab badges)
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = { all: connected };
     Object.values(prices).forEach((p) => {
@@ -75,7 +80,7 @@ export default function PriceFeedGrid() {
       <div className="flex flex-wrap gap-1.5 mb-4">
         {TYPE_FILTERS.map(({ key, label }) => {
           const count = typeCounts[key] ?? 0;
-          if (key !== "all" && count === 0) return null; // hide empty categories
+          if (key !== "all" && count === 0) return null;
           return (
             <button
               key={key}
@@ -99,7 +104,6 @@ export default function PriceFeedGrid() {
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3 mb-6">
-        {/* Search */}
         <div className="relative flex-1 min-w-[180px] max-w-xs">
           <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -113,7 +117,6 @@ export default function PriceFeedGrid() {
           />
         </div>
 
-        {/* Sort buttons */}
         <div className="flex items-center gap-1 bg-white/5 rounded-lg p-1 border border-white/8">
           {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
             <button
@@ -133,7 +136,6 @@ export default function PriceFeedGrid() {
           ))}
         </div>
 
-        {/* Status pill */}
         <div className="ml-auto flex items-center gap-2">
           <StatusPill
             status={status}
@@ -144,7 +146,7 @@ export default function PriceFeedGrid() {
         </div>
       </div>
 
-      {/* Loading / skeleton state */}
+      {/* Loading skeleton */}
       {connected === 0 && (
         <div>
           <p className="text-xs text-slate-500 mb-4">
@@ -160,7 +162,7 @@ export default function PriceFeedGrid() {
         </div>
       )}
 
-      {/* Pyth Pro teaser — shown when Equities tab is selected */}
+      {/* Pyth Pro teaser */}
       {filterType === "equity" && (
         <div className="rounded-xl border border-purple-800/40 bg-purple-950/20 p-8 text-center">
           <div className="inline-flex items-center gap-2 bg-purple-900/40 border border-purple-700/50 rounded-full px-4 py-1.5 mb-4">
@@ -193,7 +195,7 @@ export default function PriceFeedGrid() {
         </div>
       )}
 
-      {/* Price grid — paginated to keep DOM lean */}
+      {/* Price grid — paginated */}
       {connected > 0 && filterType !== "equity" && (
         <>
           {filtered.length === 0 ? (
@@ -208,7 +210,6 @@ export default function PriceFeedGrid() {
                 ))}
               </div>
 
-              {/* Load more */}
               {visibleCount < filtered.length && (
                 <div className="flex flex-col items-center gap-2 mt-6">
                   <button
@@ -234,15 +235,9 @@ export default function PriceFeedGrid() {
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
 function StatusPill({
-  status,
-  connected,
-  totalFeeds,
-  totalUpdates,
+  status, connected, totalFeeds, totalUpdates,
 }: {
-  status: string;
-  connected: number;
-  totalFeeds: number;
-  totalUpdates: number;
+  status: string; connected: number; totalFeeds: number; totalUpdates: number;
 }) {
   if (status === "connecting" || connected === 0) {
     return (
