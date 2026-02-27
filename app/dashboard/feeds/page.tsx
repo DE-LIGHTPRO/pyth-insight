@@ -66,7 +66,7 @@ export default function FeedsPage() {
 
       {/* Footer note */}
       <p className="mt-8 text-xs text-slate-600 leading-relaxed max-w-2xl">
-        Prices are polled every 500ms via REST from{" "}
+        All feeds are discovered dynamically from Hermes and polled every second via REST from{" "}
         <code className="text-slate-500">hermes.pyth.network</code>.
         Confidence intervals represent Pyth&apos;s uncertainty estimate — not a
         guarantee of accuracy. See the{" "}

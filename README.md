@@ -12,7 +12,7 @@
 
 Pyth Insight turns raw oracle data into actionable intelligence. It is not a price ticker — it is an analytical layer on top of Pyth's real-time price feeds that surfaces what the data is actually saying about market conditions, confidence, and statistical reliability.
 
-**Live Price Feeds** — 18 crypto assets polled directly from Pyth Hermes at 500ms intervals. Each feed displays the price, confidence interval (CI), CI width as a percentage, EMA deviation, and a real-time quality classification (tight / normal / wide / extreme).
+**Live Price Feeds** — Every feed available on Pyth Hermes dynamically discovered and displayed — crypto, forex, metals, and more. Prices polled in batches at 1-second intervals. Each card shows the live price, confidence interval (CI), CI width, EMA deviation, and a real-time quality classification (tight / normal / wide / extreme).
 
 **CI Calibration Analysis** *(flagship)* — Tests whether Pyth's published confidence intervals are statistically accurate. A correctly calibrated ±1σ CI should contain the true price 68.3% of the time; ±2σ should contain it 95.4%. This page runs that test against historical data from the Pyth Benchmarks API and shows whether the oracle is over- or under-confident — information that is directly useful for DeFi protocols relying on Pyth for risk calculations.
 
@@ -26,12 +26,13 @@ Pyth Insight turns raw oracle data into actionable intelligence. It is not a pri
 
 | Feature | Pyth API Used |
 |---|---|
-| Live price feeds (500ms polling) | Hermes REST (`/v2/updates/price/latest`) |
+| Full feed catalogue (dynamic) | Hermes REST (`/v2/price_feeds`) |
+| Live price polling (1s batches) | Hermes REST (`/v2/updates/price/latest`) |
 | Historical calibration data | Pyth Benchmarks API (`benchmarks.pyth.network`) |
 | Feed metadata & SDK | `@pythnetwork/hermes-client` |
 | AI data layer (March 2+) | Pyth MCP Server (with direct-API fallback) |
 
-All price feeds use official feed IDs from [pyth.network/price-feeds](https://pyth.network/price-feeds).
+All feed IDs are sourced dynamically from Hermes at runtime — no hardcoded ID lists.
 
 ---
 
