@@ -253,10 +253,10 @@ export default function VolatilityPage() {
               </svg>
               <div className="text-xs text-slate-400 leading-relaxed">
                 <span className="text-orange-300 font-medium">How to read this: </span>
-                Realized Volatility (RV) measures how much an asset's price actually moved, expressed as
+                Realized Volatility (RV) measures how much an asset&apos;s price actually moved, expressed as
                 an <span className="text-white">annualized percentage</span> computed from hourly log returns
                 via Pyth Benchmarks. When <span className="text-red-400">24h RV {">"} 7d RV</span>, short-term
-                volatility is rising — Pyth's CI bands typically widen in response. DeFi protocols use these
+                volatility is rising — Pyth&apos;s CI bands typically widen in response. DeFi protocols use these
                 signals to dynamically adjust liquidation thresholds.
               </div>
             </div>
