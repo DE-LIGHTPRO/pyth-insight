@@ -163,18 +163,20 @@ export const usePriceStore = create<PriceStore>((set, get) => ({
           return a.symbol.localeCompare(b.symbol);
         });
 
-    // ── Start polling a list of feeds ─────────────────────────────────────────
-    const startPolling = (ids: string[], staggerMs = 200) => {
+    // ── Start polling a batch list — NO stagger on first tick ─────────────────
+    // All first ticks fire immediately (setTimeout 0). HTTP/2 to hermes.pyth.network
+    // multiplexes them on one connection — no browser limit issue.
+    // setInterval staggers ongoing polls across the POLL_MS window.
+    const startPolling = (ids: string[]) => {
       chunks(ids, BATCH_SIZE).forEach((batch, i) => {
-        setTimeout(tick(batch), i * staggerMs);
-        pollTimers.push(setInterval(tick(batch), POLL_MS));
+        setTimeout(tick(batch), 0);                          // first tick: immediate
+        pollTimers.push(setInterval(tick(batch), POLL_MS + i * 150)); // stagger ongoing
       });
     };
 
     try {
-      // ── PHASE 1: Serve from localStorage cache if fresh ───────────────────
-      //    Eliminates the Hermes roundtrip on repeat visits entirely.
-      const CACHE_KEY = "pyth_feeds_v3";
+      // ── CACHE LAYER: instant warm visits ──────────────────────────────────
+      const CACHE_KEY = "pyth_feeds_v4";
       const CACHE_TTL = 3_600_000; // 1 hour
 
       let cachedFeeds: FeedMeta[] | null = null;
@@ -184,15 +186,14 @@ export const usePriceStore = create<PriceStore>((set, get) => ({
           const { data, ts } = JSON.parse(raw) as { data: FeedMeta[]; ts: number };
           if (Date.now() - ts < CACHE_TTL) cachedFeeds = data;
         }
-      } catch { /* localStorage blocked (private mode / quota) — ignore */ }
+      } catch { /* localStorage blocked — ignore */ }
 
       if (cachedFeeds) {
-        // Instant: feed catalogue already in memory from cache
+        // Feed catalogue already in browser — start polling immediately
         feedMeta = new Map(cachedFeeds.map((f) => [f.id, f]));
         set({ feeds: cachedFeeds });
         startPolling(cachedFeeds.map((f) => f.id));
-
-        // Background refresh so cache stays warm
+        // Background refresh to keep cache fresh
         fetch(`${HERMES_BASE}/v2/price_feeds`, { headers: { Accept: "application/json" } })
           .then((r) => r.ok ? r.json() : Promise.reject(r.status))
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -200,36 +201,60 @@ export const usePriceStore = create<PriceStore>((set, get) => ({
             const fresh = transformFeeds(raw);
             try { localStorage.setItem(CACHE_KEY, JSON.stringify({ data: fresh, ts: Date.now() })); } catch { /* ignore */ }
           })
-          .catch(() => { /* background refresh failed — cached data still in use */ });
-
+          .catch(() => { /* silent — cached data still valid */ });
         return;
       }
 
-      // ── PHASE 2: No cache — call Hermes directly (bypass Next.js proxy) ────
-      //    The browser already has a direct connection to hermes.pyth.network
-      //    for price polling; reusing it here avoids the Vercel serverless
-      //    cold-start + proxy roundtrip (saves ~1–3 s on first load).
-      const res = await fetch(`${HERMES_BASE}/v2/price_feeds`, {
-        headers: { Accept: "application/json" },
-      });
-      if (!res.ok) throw new Error(`Hermes price_feeds returned ${res.status}`);
+      // ── PHASE 1 (cold visit): crypto feeds first — small payload, fast ────
+      // Hermes supports ?asset_type=Crypto → ~515 feeds, ~130 KB vs ~500 KB for all.
+      // Start showing crypto cards within ~300 ms while all feeds load in background.
+      const cryptoRes = await fetch(
+        `${HERMES_BASE}/v2/price_feeds?asset_type=Crypto`,
+        { headers: { Accept: "application/json" } }
+      );
+      if (!cryptoRes.ok) throw new Error(`Hermes price_feeds returned ${cryptoRes.status}`);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const raw: any[] = await res.json();
-      const allFeeds   = transformFeeds(raw);
+      const cryptoFeeds = transformFeeds(await cryptoRes.json() as any[]);
+      feedMeta = new Map(cryptoFeeds.map((f) => [f.id, f]));
+      set({ feeds: cryptoFeeds });
+      startPolling(cryptoFeeds.map((f) => f.id));   // ← cards appear immediately
 
-      // Persist to localStorage so next visit is instant
-      try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ data: allFeeds, ts: Date.now() }));
-      } catch { /* quota exceeded — ignore */ }
+      // ── PHASE 2 (background): remaining feeds — forex, metals, equities ───
+      fetch(`${HERMES_BASE}/v2/price_feeds`, { headers: { Accept: "application/json" } })
+        .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .then((raw: any[]) => {
+          const allFeeds  = transformFeeds(raw);
+          const newFeeds  = allFeeds.filter((f) => f.assetType !== "crypto");
 
-      feedMeta = new Map(allFeeds.map((f) => [f.id, f]));
-      set({ feeds: allFeeds });
-      startPolling(allFeeds.map((f) => f.id));
+          // Extend feedMeta with non-crypto feeds
+          newFeeds.forEach((f) => feedMeta.set(f.id, f));
+          set({ feeds: allFeeds });
+
+          // Start polling non-crypto feeds (lower priority — slight delay)
+          setTimeout(() => startPolling(newFeeds.map((f) => f.id)), 500);
+
+          // Persist full catalogue to cache for next visit
+          try {
+            localStorage.setItem(CACHE_KEY, JSON.stringify({ data: allFeeds, ts: Date.now() }));
+          } catch { /* quota — ignore */ }
+        })
+        .catch((err) => console.warn("[PriceStore] background feed load failed:", err));
 
     } catch (err) {
       console.error("[PriceStore] init error:", err);
-      set({ status: "error" });
+      // Fallback: try /api/feeds proxy if direct Hermes call failed
+      try {
+        const res = await fetch("/api/feeds");
+        if (!res.ok) throw new Error(`/api/feeds returned ${res.status}`);
+        const allFeeds: FeedMeta[] = await res.json();
+        feedMeta = new Map(allFeeds.map((f) => [f.id, f]));
+        set({ feeds: allFeeds });
+        startPolling(allFeeds.map((f) => f.id));
+      } catch {
+        set({ status: "error" });
+      }
     }
   },
 
