@@ -15,8 +15,8 @@ import { type ParsedPrice } from "@/lib/pyth/hermes";
 import { type FeedMeta }   from "@/app/api/feeds/route";
 
 const HERMES_BASE = "https://hermes.pyth.network";
-const POLL_MS     = 1000;   // 1-second poll — gives adequate real-time feel
-const BATCH_SIZE  = 50;     // IDs per REST request (keeps URL length safe)
+const POLL_MS     = 3000;   // 3-second poll — 1s caused 37 concurrent batches/s, overloading browser HTTP connections
+const BATCH_SIZE  = 100;    // was 50 → 1838/100 = 19 batches (was 37), keeps URL length safe
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -115,7 +115,7 @@ export const usePriceStore = create<PriceStore>((set, get) => ({
   totalUpdates: 0,
   sortBy:       "symbol",
   sortDir:      "asc",
-  filterType:   "all",
+  filterType:   "crypto", // default to crypto — "all" renders 680+ cards and is too slow
 
   initStream: async () => {
     if (pollTimers.length > 0)          return; // already running
@@ -152,9 +152,10 @@ export const usePriceStore = create<PriceStore>((set, get) => ({
           });
       };
 
-      // Fire first tick for each batch immediately (staggered by 50ms)
+      // Fire first tick for each batch staggered by 200ms — spreads the burst
+      // across 19 × 200ms = 3.8s so all 19 first-requests don't fire at once.
       batches.forEach((batch, i) => {
-        setTimeout(tick(batch), i * 50);
+        setTimeout(tick(batch), i * 200);
         const t = setInterval(tick(batch), POLL_MS);
         pollTimers.push(t);
       });

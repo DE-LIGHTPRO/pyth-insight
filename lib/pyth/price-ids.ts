@@ -27,6 +27,7 @@ export const PRICE_IDS: Record<string, string> = {
   "ADA/USD":   "0x2a01deaec9e51a579277b34b122399984d0bbf57e2458a7e42fecd2829867a0d",
   "DOT/USD":   "0xca3eed9b267293f6595901c734c7525ce8ef49adafe8284606ceb307afa2ca5b",
   "ATOM/USD":  "0xb00b60f88b03a6a625a8d1c048c3f66653edf217439983d037e7222c4e612819",
+  "JUP/USD":   "0x0a0408d619e9380abad35060f9192039ed5042fa6f82301d0e48bb52be830996",
 };
 
 export const SYMBOL_LIST = Object.keys(PRICE_IDS);
@@ -55,4 +56,12 @@ export const BENCHMARKS_SYMBOLS: Record<string, string> = {
   "OP/USD":    "Crypto.OP/USD",
   "LINK/USD":  "Crypto.LINK/USD",
   "UNI/USD":   "Crypto.UNI/USD",
+  "AAVE/USD":  "Crypto.AAVE/USD",
+  "DOT/USD":   "Crypto.DOT/USD",
+  "DOGE/USD":  "Crypto.DOGE/USD",
+  "ADA/USD":   "Crypto.ADA/USD",
+  "ATOM/USD":  "Crypto.ATOM/USD",
+  "JUP/USD":   "Crypto.JUP/USD",
+  "LTC/USD":   "Crypto.LTC/USD",
+  "XRP/USD":   "Crypto.XRP/USD",
 };

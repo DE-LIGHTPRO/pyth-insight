@@ -92,7 +92,7 @@ type CalibData = CalibrationResult & { sampleSize: number };
 
 export default function CalibrationPage() {
   const [asset,   setAsset]   = useState("BTC/USD");
-  const [days,    setDays]    = useState(7);
+  const [days,    setDays]    = useState(3); // 3 days = 72 Benchmarks calls (was 7 = 168 → often rate-limited)
   const [horizon, setHorizon] = useState(60);
   const [loading, setLoading] = useState(false);
   const [result,  setResult]  = useState<CalibData | null>(null);

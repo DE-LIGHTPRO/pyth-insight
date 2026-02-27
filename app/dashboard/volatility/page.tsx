@@ -1,31 +1,117 @@
-import Link from "next/link";
+"use client";
 
-export const metadata = {
-  title: "Volatility Intelligence · Pyth Insight",
+/**
+ * Volatility Intelligence — live realized volatility rankings
+ * powered by Pyth Benchmarks historical OHLCV data.
+ */
+
+import { useState, useEffect, useCallback } from "react";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer, Cell,
+} from "recharts";
+import type { AssetVolatility, VolRegime } from "@/app/api/volatility/route";
+
+// ── Regime styling ─────────────────────────────────────────────────────────────
+
+const REGIME_STYLE: Record<VolRegime, { pill: string; bar: string; label: string }> = {
+  low:     { pill: "bg-emerald-950 text-emerald-400 border-emerald-700", bar: "#10b981", label: "Low"     },
+  medium:  { pill: "bg-sky-950 text-sky-400 border-sky-700",             bar: "#38bdf8", label: "Medium"  },
+  high:    { pill: "bg-amber-950 text-amber-400 border-amber-700",       bar: "#f59e0b", label: "High"    },
+  extreme: { pill: "bg-red-950 text-red-400 border-red-700",             bar: "#ef4444", label: "Extreme" },
 };
 
-const PREVIEW_FEATURES = [
-  {
-    title: "Realized Volatility Rankings",
-    desc:  "7-day and 30-day annualized RV computed from Pyth Benchmarks hourly candles, ranked by vol regime.",
-  },
-  {
-    title: "CI Width Trend Analysis",
-    desc:  "Detect when Pyth's confidence intervals are widening or tightening — early signal for regime changes.",
-  },
-  {
-    title: "Cross-Asset Correlation",
-    desc:  "Live correlation matrix showing which assets move together using Pyth's simultaneous price updates.",
-  },
-  {
-    title: "Vol Surface Heatmap",
-    desc:  "Rolling 24h × 7-day heatmap of intraday CI width fluctuations per asset — spot patterns instantly.",
-  },
-];
+// ── Mini sparkline (inline SVG) ────────────────────────────────────────────────
+
+function MiniSparkline({ closes, regime }: { closes: number[]; regime: VolRegime }) {
+  if (closes.length < 3) return null;
+  const w = 80, h = 28, pad = 2;
+  const min   = Math.min(...closes);
+  const max   = Math.max(...closes);
+  const range = max - min || max * 0.001 || 1;
+  const pts   = closes.map((c, i) => ({
+    x: (i / (closes.length - 1)) * w,
+    y: pad + (1 - (c - min) / range) * (h - pad * 2),
+  }));
+  let d = `M ${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+  for (let i = 1; i < pts.length; i++) {
+    const cpx = ((pts[i - 1].x + pts[i].x) / 2).toFixed(1);
+    d += ` C ${cpx},${pts[i - 1].y.toFixed(1)} ${cpx},${pts[i].y.toFixed(1)} ${pts[i].x.toFixed(1)},${pts[i].y.toFixed(1)}`;
+  }
+  const color = REGIME_STYLE[regime].bar;
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="opacity-70">
+      <path d={d} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// ── Custom bar chart tooltip ────────────────────────────────────────────────────
+
+function VolTooltip({ active, payload, label }: {
+  active?: boolean;
+  payload?: Array<{ name: string; value: number }>;
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
+  const rv7d  = payload.find((p) => p.name === "7d RV");
+  const rv24h = payload.find((p) => p.name === "24h RV");
+  return (
+    <div className="rounded-lg border border-white/10 bg-[rgb(14,14,22)] px-4 py-3 shadow-xl text-sm">
+      <div className="font-semibold text-white mb-2">{label}</div>
+      {rv7d  && <div className="text-slate-400">7d RV: <span className="text-white font-mono">{rv7d.value.toFixed(1)}%</span></div>}
+      {rv24h && <div className="text-slate-400 mt-0.5">24h RV: <span className="text-white font-mono">{rv24h.value.toFixed(1)}%</span></div>}
+    </div>
+  );
+}
+
+// ── Trend arrow ────────────────────────────────────────────────────────────────
+
+function TrendBadge({ trend }: { trend: number }) {
+  const rising  = trend > 5;
+  const falling = trend < -5;
+  if (rising)  return <span className="text-red-400 text-xs font-mono">↑ +{trend.toFixed(1)}%</span>;
+  if (falling) return <span className="text-emerald-400 text-xs font-mono">↓ {trend.toFixed(1)}%</span>;
+  return <span className="text-slate-500 text-xs font-mono">→ {trend > 0 ? "+" : ""}{trend.toFixed(1)}%</span>;
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function VolatilityPage() {
+  const [data,    setData]    = useState<AssetVolatility[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res  = await fetch("/api/volatility");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? `Server error ${res.status}`);
+      setData(json as AssetVolatility[]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load volatility data");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Auto-run on mount
+  useEffect(() => { load(); }, [load]);
+
+  // Chart data
+  const chartData = data?.map((a) => ({
+    name:    a.symbol.split("/")[0],
+    "7d RV":  a.rv7d,
+    "24h RV": a.rv24h,
+    regime:  a.regime,
+  })) ?? [];
+
   return (
     <div className="max-w-6xl mx-auto px-6 py-10">
+
+      {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4 mb-8">
         <div>
           <div className="flex items-center gap-2 mb-2">
@@ -34,51 +120,149 @@ export default function VolatilityPage() {
           </div>
           <h1 className="text-2xl font-bold text-white">Volatility Intelligence</h1>
           <p className="text-slate-400 text-sm mt-1 max-w-xl leading-relaxed">
-            7-day realized volatility rankings and CI width trend analysis across all Pyth-tracked
-            assets — powered by the Benchmarks historical data API.
+            7-day realized volatility rankings and 24h trend analysis across all Pyth-tracked
+            crypto assets — computed from Benchmarks hourly OHLCV data.
           </p>
         </div>
+        <a
+          href="https://benchmarks.pyth.network"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-orange-400 hover:text-orange-300 transition-colors mt-1"
+        >
+          Pyth Benchmarks API →
+        </a>
       </div>
 
-      <div className="rounded-xl border border-white/8 bg-[rgb(17,17,25)] p-8 mb-5">
-        <div className="flex flex-col items-center text-center gap-4 py-8">
-          <div className="w-14 h-14 rounded-2xl bg-orange-950/60 border border-orange-800/40 flex items-center justify-center">
-            <svg className="w-6 h-6 text-orange-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
-            </svg>
+      {/* Loading */}
+      {loading && (
+        <div className="rounded-xl border border-white/8 bg-[rgb(17,17,25)] p-8 flex flex-col items-center gap-4">
+          <div className="w-10 h-10 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-white font-medium">Fetching Benchmarks OHLCV data…</p>
+          <p className="text-slate-500 text-sm">
+            Loading hourly candles for {Object.keys({}).length || "all"} assets from{" "}
+            <code className="text-slate-400">benchmarks.pyth.network</code>
+          </p>
+          <div className="w-full max-w-md bg-white/5 rounded-full h-1 overflow-hidden">
+            <div className="h-full bg-orange-500 rounded-full animate-pulse w-3/4" />
           </div>
-          <div>
-            <div className="text-xs text-orange-400 font-medium tracking-wide uppercase mb-2">In Development</div>
-            <p className="text-white font-semibold text-lg">Volatility Intelligence</p>
-            <p className="text-slate-500 text-sm mt-1 max-w-sm">
-              Historical volatility analysis powered by Pyth Benchmarks OHLCV data.
-              The CI Calibration Analysis is live now — this module ships next.
-            </p>
-          </div>
-          <Link
-            href="/dashboard/calibration"
-            className="mt-2 px-5 py-2.5 rounded-lg bg-orange-600/20 hover:bg-orange-600/30 border border-orange-700/50 text-orange-300 text-sm font-medium transition-all"
-          >
-            Try Calibration Analysis instead →
-          </Link>
         </div>
-      </div>
+      )}
 
-      <div className="grid sm:grid-cols-2 gap-3">
-        {PREVIEW_FEATURES.map((f) => (
-          <div key={f.title} className="rounded-xl border border-white/6 bg-[rgb(17,17,25)] p-4 opacity-60">
-            <div className="flex items-start gap-3">
-              <div className="w-1.5 h-1.5 rounded-full bg-orange-500 mt-1.5 flex-shrink-0" />
+      {/* Error */}
+      {error && !loading && (
+        <div className="rounded-xl border border-red-800/50 bg-red-950/20 p-6 flex items-start gap-3 mb-6">
+          <svg className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" />
+          </svg>
+          <div>
+            <p className="text-red-300 font-medium text-sm">Failed to load volatility data</p>
+            <p className="text-red-400/70 text-xs mt-0.5">{error}</p>
+            <button onClick={load} className="mt-2 text-xs text-red-400 hover:text-red-300 underline">
+              Retry →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Results */}
+      {data && !loading && (
+        <>
+          {/* Regime legend */}
+          <div className="flex flex-wrap gap-2 mb-5">
+            {(["low","medium","high","extreme"] as VolRegime[]).map((r) => (
+              <div key={r} className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border font-medium ${REGIME_STYLE[r].pill}`}>
+                <span className="w-1.5 h-1.5 rounded-full" style={{ background: REGIME_STYLE[r].bar }} />
+                {REGIME_STYLE[r].label} vol · {data.filter((a) => a.regime === r).length} assets
+              </div>
+            ))}
+          </div>
+
+          {/* Bar chart */}
+          <div className="rounded-xl border border-white/8 bg-[rgb(17,17,25)] p-5 mb-5">
+            <div className="flex items-center justify-between mb-4">
               <div>
-                <div className="text-white font-medium text-sm mb-0.5">{f.title}</div>
-                <div className="text-xs text-slate-500 leading-relaxed">{f.desc}</div>
+                <div className="text-sm font-semibold text-white">Realized Volatility Rankings</div>
+                <div className="text-xs text-slate-500 mt-0.5">Annualized, computed from Pyth Benchmarks hourly candles</div>
+              </div>
+              <div className="flex gap-4 text-xs text-slate-400">
+                <span className="flex items-center gap-1.5"><span className="w-3 h-1.5 rounded-sm bg-orange-500 inline-block" /> 7d RV</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-1.5 rounded-sm bg-orange-900/80 inline-block" /> 24h RV</span>
+              </div>
+            </div>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }} barCategoryGap="20%" barGap={3}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                <XAxis dataKey="name" tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis tickFormatter={(v) => `${v}%`} tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} width={44} />
+                <Tooltip content={<VolTooltip />} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
+                <Bar dataKey="7d RV" radius={[3, 3, 0, 0]} maxBarSize={28}>
+                  {chartData.map((entry, i) => (
+                    <Cell key={i} fill={REGIME_STYLE[entry.regime as VolRegime].bar} />
+                  ))}
+                </Bar>
+                <Bar dataKey="24h RV" fill="rgba(251,146,60,0.35)" radius={[3, 3, 0, 0]} maxBarSize={28} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Rankings table */}
+          <div className="rounded-xl border border-white/8 bg-[rgb(17,17,25)] overflow-hidden mb-5">
+            <div className="px-5 py-3.5 border-b border-white/6 flex items-center justify-between">
+              <span className="text-sm font-semibold text-white">Detailed Rankings</span>
+              <span className="text-xs text-slate-500">Sorted by 7-day RV · highest first</span>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-white/6">
+                  {["#", "Asset", "7d RV", "24h RV", "Vol Trend", "Regime", "48h Price"].map((h) => (
+                    <th key={h} className="text-left text-xs text-slate-500 font-medium px-4 py-2.5">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.map((a, i) => {
+                  const rs = REGIME_STYLE[a.regime];
+                  return (
+                    <tr key={a.symbol} className="border-b border-white/4 hover:bg-white/2 transition-colors">
+                      <td className="px-4 py-3 text-slate-600 font-mono text-xs">{i + 1}</td>
+                      <td className="px-4 py-3 font-semibold text-white">{a.symbol.split("/")[0]}</td>
+                      <td className="px-4 py-3 font-mono text-white font-medium">{a.rv7d.toFixed(1)}%</td>
+                      <td className="px-4 py-3 font-mono text-slate-400">{a.rv24h.toFixed(1)}%</td>
+                      <td className="px-4 py-3"><TrendBadge trend={a.rvTrend} /></td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex text-[10px] px-2 py-0.5 rounded-full border font-medium capitalize ${rs.pill}`}>
+                          {rs.label}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <MiniSparkline closes={a.closes} regime={a.regime} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Interpretation */}
+          <div className="rounded-xl border border-orange-900/40 bg-orange-950/10 p-5">
+            <div className="flex items-start gap-3">
+              <svg className="w-4 h-4 text-orange-400 flex-shrink-0 mt-0.5" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm.93 6.588l-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM8 5.5a1 1 0 110-2 1 1 0 010 2z" />
+              </svg>
+              <div className="text-xs text-slate-400 leading-relaxed">
+                <span className="text-orange-300 font-medium">How to read this: </span>
+                Realized Volatility (RV) measures how much an asset's price actually moved, expressed as
+                an <span className="text-white">annualized percentage</span> computed from hourly log returns
+                via Pyth Benchmarks. When <span className="text-red-400">24h RV {">"} 7d RV</span>, short-term
+                volatility is rising — Pyth's CI bands typically widen in response. DeFi protocols use these
+                signals to dynamically adjust liquidation thresholds.
               </div>
             </div>
           </div>
-        ))}
-      </div>
+        </>
+      )}
     </div>
   );
 }

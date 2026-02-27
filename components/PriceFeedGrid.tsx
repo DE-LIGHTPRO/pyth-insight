@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback } from "react";
+
+const PAGE_SIZE = 60; // cards rendered per page — keeps DOM lean and browser fast
 import { usePriceStore }     from "@/lib/stores/priceStore";
 import { usePriceStream }    from "@/hooks/usePriceStream";
 import PriceFeedCard          from "@/components/PriceFeedCard";
@@ -37,11 +39,16 @@ export default function PriceFeedGrid() {
   const setFilterType = usePriceStore((s) => s.setFilterType);
   const getSorted     = usePriceStore((s) => s.getSortedPrices);
 
-  const [search, setSearch] = useState("");
+  const [search,      setSearch]      = useState("");
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  const loadMore = useCallback(() => setVisibleCount((n) => n + PAGE_SIZE), []);
 
   const sortedPrices = getSorted();
 
   const filtered = useMemo(() => {
+    // Reset pagination whenever the filtered set changes
+    setVisibleCount(PAGE_SIZE);
     if (!search) return sortedPrices;
     const q = search.toLowerCase();
     return sortedPrices.filter(
@@ -186,19 +193,37 @@ export default function PriceFeedGrid() {
         </div>
       )}
 
-      {/* Price grid */}
+      {/* Price grid — paginated to keep DOM lean */}
       {connected > 0 && filterType !== "equity" && (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {filtered.map((p) => (
-              <PriceFeedCard key={p.symbol} price={p} />
-            ))}
-          </div>
-
-          {filtered.length === 0 && (
+          {filtered.length === 0 ? (
             <div className="text-center py-16 text-slate-500">
               No feeds match &ldquo;{search}&rdquo;
             </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                {filtered.slice(0, visibleCount).map((p) => (
+                  <PriceFeedCard key={p.symbol} price={p} />
+                ))}
+              </div>
+
+              {/* Load more */}
+              {visibleCount < filtered.length && (
+                <div className="flex flex-col items-center gap-2 mt-6">
+                  <button
+                    onClick={loadMore}
+                    className="px-6 py-2.5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/8 hover:border-white/18 text-slate-300 text-sm font-medium transition-all duration-150"
+                  >
+                    Show more · {Math.min(PAGE_SIZE, filtered.length - visibleCount)} of{" "}
+                    {filtered.length - visibleCount} remaining
+                  </button>
+                  <span className="text-xs text-slate-600">
+                    Showing {Math.min(visibleCount, filtered.length)} of {filtered.length} feeds
+                  </span>
+                </div>
+              )}
+            </>
           )}
         </>
       )}
