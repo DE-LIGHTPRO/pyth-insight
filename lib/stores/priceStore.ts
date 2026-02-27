@@ -174,7 +174,8 @@ export const usePriceStore = create<PriceStore>((set, get) => ({
     set((state) => {
       const now       = Date.now();
       const nowSecs   = Math.floor(now / 1000);
-      const MAX_AGE   = 3600; // discard feeds not updated within the last hour
+      const MAX_AGE   = 604_800; // 7 days — forex/metals close on weekends (up to ~60 hrs stale)
+                                    // Pyth Pro equity feeds are epoch-0 / decades old → still filtered
       const updated   = { ...state.prices };
 
       incoming.forEach((p) => {
