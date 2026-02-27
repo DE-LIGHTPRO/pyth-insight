@@ -84,45 +84,51 @@ export async function getPriceSnapshots(
   const snapshots: PriceSnapshot[] = [];
   const step = intervalMinutes * 60;
 
-  // Fetch snapshots at regular intervals
+  // Build timestamp list
   const timestamps: number[] = [];
   for (let t = fromTimestamp; t <= toTimestamp; t += step) {
     timestamps.push(t);
   }
 
-  // Batch in groups of 25 to respect rate limits
-  const BATCH_SIZE = 25;
+  // ── Rate-limit-aware batching ──────────────────────────────────────────────
+  // Benchmarks API limit: 30 req / 10 s.
+  // Sending 25 concurrent requests looked like ~250 req/s from the server's
+  // perspective → most requests were rejected → < 20 valid snapshots → error.
+  // Fix: small concurrent batches (5) with a 2s gap = 25 req/10s, well under.
+  const BATCH_SIZE    = 5;
+  const BATCH_DELAY   = 2000; // ms between batches
+
   for (let i = 0; i < timestamps.length; i += BATCH_SIZE) {
     const batch = timestamps.slice(i, i + BATCH_SIZE);
 
     const results = await Promise.allSettled(
       batch.map((ts) =>
         fetch(
-          `${BENCHMARKS_URL}/v1/updates/price/${ts}?ids[]=${priceId}&parsed=true`
-        ).then((r) => r.json())
+          `${BENCHMARKS_URL}/v1/updates/price/${ts}?ids[]=${priceId}&parsed=true`,
+          { cache: "no-store" }
+        ).then((r) => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
       )
     );
 
     for (const result of results) {
       if (result.status === "fulfilled") {
-        const data = result.value;
-        const parsed = data.parsed?.[0];
+        const parsed = result.value?.parsed?.[0];
         if (parsed) {
-          const expo = parsed.price.expo;
+          const expo  = parsed.price.expo;
           const scale = Math.pow(10, expo);
           snapshots.push({
             timestamp: parsed.price.publish_time,
-            price: Number(parsed.price.price) * scale,
-            conf: Number(parsed.price.conf) * scale,
+            price:     Number(parsed.price.price) * scale,
+            conf:      Number(parsed.price.conf)  * scale,
             expo,
           });
         }
       }
     }
 
-    // Small delay between batches to avoid rate limiting
+    // Respect rate limit: wait between batches (skip after last batch)
     if (i + BATCH_SIZE < timestamps.length) {
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, BATCH_DELAY));
     }
   }
 
