@@ -27,6 +27,7 @@ export interface LivePrice extends ParsedPrice {
   updateCount: number;
   assetType:   string;
   base:        string;
+  pythSymbol:  string; // e.g. "Crypto.BTC/USD" — needed for Benchmarks TradingView shim
 }
 
 export type StreamStatus = "idle" | "connecting" | "connected" | "error";
@@ -203,6 +204,7 @@ export const usePriceStore = create<PriceStore>((set, get) => ({
           updateCount: (prev?.updateCount ?? 0) + 1,
           assetType:   feed?.assetType ?? "other",
           base:        feed?.base ?? p.symbol.split("/")[0],
+          pythSymbol:  feed?.pythSymbol ?? "",
         };
       });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   BarChart,
   Bar,
@@ -18,8 +18,9 @@ import type { CalibrationResult } from "@/lib/pyth/benchmarks";
 // ── Asset + period options ────────────────────────────────────────────────────
 
 const ASSETS = [
-  "BTC/USD", "ETH/USD", "SOL/USD", "BNB/USD", "AVAX/USD",
-  "ARB/USD", "OP/USD",  "LINK/USD", "UNI/USD", "AAVE/USD",
+  "BTC/USD",  "ETH/USD",  "SOL/USD",  "BNB/USD",  "AVAX/USD",
+  "ARB/USD",  "OP/USD",   "LINK/USD", "UNI/USD",  "AAVE/USD",
+  "DOT/USD",  "DOGE/USD", "ADA/USD",  "ATOM/USD", "JUP/USD",
 ];
 
 const PERIODS = [
@@ -125,6 +126,12 @@ export default function CalibrationPage() {
       setLoading(false);
     }
   }, [asset, days, horizon]);
+
+  // Auto-run BTC 7-day analysis on first page load so judges see results immediately
+  useEffect(() => {
+    runAnalysis();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally empty — run once on mount only
 
   // ── Chart data ──────────────────────────────────────────────────────────────
 
