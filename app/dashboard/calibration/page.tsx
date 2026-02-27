@@ -127,7 +127,7 @@ export default function CalibrationPage() {
     }
   }, [asset, days, horizon]);
 
-  // Auto-run BTC 7-day analysis on first page load so judges see results immediately
+  // Auto-run BTC 3-day analysis on first page load so judges see results immediately
   useEffect(() => {
     runAnalysis();
     // eslint-disable-next-line react-hooks/exhaustive-deps

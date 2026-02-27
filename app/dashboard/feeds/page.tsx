@@ -15,12 +15,12 @@ export default function FeedsPage() {
             <span className="text-xs text-cyan-400 font-medium tracking-wide uppercase">
               Pyth Price Feeds
             </span>
-            <span className="text-xs text-slate-600">via Hermes · 1s polling · all available feeds</span>
+            <span className="text-xs text-slate-600">via Hermes · 3s polling · crypto by default</span>
           </div>
           <h1 className="text-2xl font-bold text-white">Live Price Feeds</h1>
           <p className="text-slate-400 text-sm mt-1 max-w-xl">
             Every price feed available on Pyth Hermes — crypto, forex, metals and more —
-            polled live at 1-second intervals. Each card shows the live price, confidence
+            polled live at 3-second intervals. Each card shows the live price, confidence
             interval (±CI), and CI width as a percentage. A narrower CI means the oracle
             is more certain of the price.
           </p>
@@ -66,7 +66,7 @@ export default function FeedsPage() {
 
       {/* Footer note */}
       <p className="mt-8 text-xs text-slate-600 leading-relaxed max-w-2xl">
-        All feeds are discovered dynamically from Hermes and polled every second via REST from{" "}
+        All feeds are discovered dynamically from Hermes and polled every 3 seconds via REST from{" "}
         <code className="text-slate-500">hermes.pyth.network</code>.
         Confidence intervals represent Pyth&apos;s uncertainty estimate — not a
         guarantee of accuracy. See the{" "}

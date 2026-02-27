@@ -142,6 +142,7 @@ export default function PriceFeedGrid() {
             connected={connected}
             totalFeeds={totalFeeds}
             totalUpdates={totalUpdates}
+            filterType={filterType}
           />
         </div>
       </div>
@@ -151,7 +152,9 @@ export default function PriceFeedGrid() {
         <div>
           <p className="text-xs text-slate-500 mb-4">
             {totalFeeds > 0
-              ? `Fetching prices for ${totalFeeds} feeds…`
+              ? filterType === "all"
+                ? `Fetching prices for ${totalFeeds.toLocaleString()} feeds…`
+                : `Fetching ${filterType} price feeds…`
               : "Discovering available Pyth feeds…"}
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -235,15 +238,19 @@ export default function PriceFeedGrid() {
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
 function StatusPill({
-  status, connected, totalFeeds, totalUpdates,
+  status, connected, totalFeeds, totalUpdates, filterType,
 }: {
-  status: string; connected: number; totalFeeds: number; totalUpdates: number;
+  status: string; connected: number; totalFeeds: number; totalUpdates: number; filterType: string;
 }) {
   if (status === "connecting" || connected === 0) {
+    const label =
+      totalFeeds === 0 ? "Connecting to Pyth Hermes…"
+      : filterType === "all" ? `Loading ${totalFeeds.toLocaleString()} feeds…`
+      : `Loading ${filterType} feeds…`;
     return (
       <div className="flex items-center gap-1.5 text-xs text-amber-400">
         <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-        {totalFeeds > 0 ? `Loading ${totalFeeds} feeds…` : "Connecting to Pyth Hermes…"}
+        {label}
       </div>
     );
   }

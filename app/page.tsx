@@ -159,8 +159,8 @@ export default function Home() {
       {/* ── Stats bar ─────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-3 gap-px rounded-xl overflow-hidden border border-white/8 bg-white/8 mb-16">
         {[
-          { value: "380+",    label: "Live feeds"            },
-          { value: "500ms",   label: "Price update interval" },
+          { value: "1,800+",  label: "Live feeds"            },
+          { value: "3s",      label: "Price update interval" },
           { value: "0–100",   label: "Calibration score"     },
         ].map((s) => (
           <div key={s.label} className="bg-[rgb(17,17,25)] px-6 py-5 flex flex-col items-center gap-1">
