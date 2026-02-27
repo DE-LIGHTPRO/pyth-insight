@@ -142,9 +142,22 @@ export default function Home() {
           are statistically accurate — and an AI analyst that explains what the data means.
         </p>
 
-        <p className="text-sm text-slate-600 max-w-xl mx-auto mb-10">
+        <p className="text-sm text-slate-600 max-w-xl mx-auto mb-6">
           Powered by Pyth Price Feeds · Pyth Benchmarks · Pyth Entropy · Pyth MCP Server
         </p>
+
+        {/* Live oracle attack callout */}
+        <div className="inline-flex items-start gap-2.5 px-4 py-2.5 rounded-xl border border-red-800/50 bg-red-950/20 text-left max-w-lg mx-auto mb-8">
+          <span className="w-2 h-2 rounded-full bg-red-400 animate-pulse flex-shrink-0 mt-1" />
+          <p className="text-xs text-slate-400 leading-relaxed">
+            <span className="text-red-300 font-semibold">Feb 2026 — $388K oracle exploit: </span>
+            @ploutos_money drained after using a BTC/USD feed to price USDC collateral.
+            Pyth&apos;s CI would have flagged the mismatch instantly.{" "}
+            <Link href="/learn" className="text-purple-400 hover:text-purple-300 underline underline-offset-2">
+              See the full breakdown →
+            </Link>
+          </p>
+        </div>
 
         <div className="flex flex-wrap gap-4 justify-center">
           <Link href="/dashboard/calibration" className="btn-primary text-base px-6 py-3">
@@ -245,10 +258,17 @@ export default function Home() {
           Pyth publishes a confidence interval with every price update.
           But is it actually calibrated?
         </h2>
-        <p className="text-slate-400 max-w-xl mx-auto mb-8 text-sm leading-relaxed">
+        <p className="text-slate-400 max-w-xl mx-auto mb-4 text-sm leading-relaxed">
           A perfectly calibrated oracle&apos;s ±1σ band should capture exactly 68.3% of future
           price moves. We ran the numbers across months of historical data — the results are
           more interesting than you&apos;d expect.
+        </p>
+        <p className="text-slate-500 max-w-md mx-auto mb-8 text-xs leading-relaxed">
+          The same CI that answers this question also prevents oracle exploits like the{" "}
+          <Link href="/learn" className="text-red-400 hover:text-red-300">
+            $388K @ploutos_money attack
+          </Link>{" "}
+          — where a mismatched feed was priced at $80,000 instead of $1.00.
         </p>
         <Link href="/dashboard/calibration" className="btn-primary px-6 py-3">
           See the calibration results →
