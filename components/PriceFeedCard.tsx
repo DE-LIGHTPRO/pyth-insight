@@ -4,36 +4,15 @@ import { useEffect, useRef, memo } from "react";
 import { type LivePrice } from "@/lib/stores/priceStore";
 import { formatPrice, formatConf, formatAge, confLabel } from "@/lib/pyth/hermes";
 
-// ── Asset metadata ────────────────────────────────────────────────────────────
-// Token icons sourced from the cryptocurrency-icons package via jsDelivr CDN.
-// These load directly in the browser — no proxy restriction.
-// Fallback: clean monogram badge using the first 2–3 letters of the base symbol.
-
-const CDN = "https://cdn.jsdelivr.net/npm/cryptocurrency-icons@0.18.1/svg/color";
-
-const ASSET_META: Record<string, { icon: string; color: string; bg: string }> = {
-  "BTC/USD":   { icon: `${CDN}/btc.svg`,   color: "text-orange-400", bg: "bg-orange-950/50" },
-  "ETH/USD":   { icon: `${CDN}/eth.svg`,   color: "text-blue-400",   bg: "bg-blue-950/50"   },
-  "SOL/USD":   { icon: `${CDN}/sol.svg`,   color: "text-purple-400", bg: "bg-purple-950/50" },
-  "BNB/USD":   { icon: `${CDN}/bnb.svg`,   color: "text-yellow-400", bg: "bg-yellow-950/50" },
-  "AVAX/USD":  { icon: `${CDN}/avax.svg`,  color: "text-red-400",    bg: "bg-red-950/50"    },
-  // POL/USD removed — feed ID was malformed (63 chars instead of 64); pending re-verification
-  "ARB/USD":   { icon: `${CDN}/arb.svg`,   color: "text-sky-400",    bg: "bg-sky-950/50"    },
-  "OP/USD":    { icon: `${CDN}/op.svg`,    color: "text-rose-400",   bg: "bg-rose-950/50"   },
-  "LINK/USD":  { icon: `${CDN}/link.svg`,  color: "text-blue-300",   bg: "bg-blue-950/50"   },
-  "UNI/USD":   { icon: `${CDN}/uni.svg`,   color: "text-pink-400",   bg: "bg-pink-950/50"   },
-  "AAVE/USD":  { icon: `${CDN}/aave.svg`,  color: "text-purple-300", bg: "bg-purple-950/50" },
-  "CRV/USD":   { icon: `${CDN}/crv.svg`,   color: "text-yellow-300", bg: "bg-yellow-950/50" },
-  // MKR/USD deprecated on Hermes — removed
-  "SNX/USD":   { icon: `${CDN}/snx.svg`,   color: "text-cyan-400",   bg: "bg-cyan-950/50"   },
-  "DOGE/USD":  { icon: `${CDN}/doge.svg`,  color: "text-yellow-400", bg: "bg-yellow-950/50" },
-  "LTC/USD":   { icon: `${CDN}/ltc.svg`,   color: "text-slate-300",  bg: "bg-slate-800/50"  },
-  "XRP/USD":   { icon: `${CDN}/xrp.svg`,   color: "text-blue-300",   bg: "bg-blue-950/50"   },
-  "ADA/USD":   { icon: `${CDN}/ada.svg`,   color: "text-sky-400",    bg: "bg-sky-950/50"    },
-  "DOT/USD":   { icon: `${CDN}/dot.svg`,   color: "text-pink-400",   bg: "bg-pink-950/50"   },
-  "ATOM/USD":  { icon: `${CDN}/atom.svg`,  color: "text-violet-300", bg: "bg-violet-950/50" },
+// ── Asset type badge colours ───────────────────────────────────────────────────
+const TYPE_BADGE: Record<string, string> = {
+  crypto: "bg-purple-950/60 text-purple-400 border-purple-800/50",
+  fx:     "bg-blue-950/60   text-blue-400   border-blue-800/50",
+  metal:  "bg-yellow-950/60 text-yellow-400 border-yellow-800/50",
+  equity: "bg-green-950/60  text-green-400  border-green-800/50",
 };
 
+// ── CI classification colours ──────────────────────────────────────────────────
 const CONF_COLORS = {
   tight:   { bar: "bg-emerald-500", text: "text-emerald-400", badge: "bg-emerald-950 text-emerald-400 border-emerald-800" },
   normal:  { bar: "bg-sky-500",     text: "text-sky-400",     badge: "bg-sky-950 text-sky-400 border-sky-800"             },
@@ -41,32 +20,68 @@ const CONF_COLORS = {
   extreme: { bar: "bg-red-500",     text: "text-red-400",     badge: "bg-red-950 text-red-400 border-red-800"             },
 };
 
-// ── Token icon with monogram fallback ─────────────────────────────────────────
+// ── Consistent colour palette derived from symbol string ──────────────────────
+const PALETTE = [
+  { color: "text-orange-400", bg: "bg-orange-950/50" },
+  { color: "text-blue-400",   bg: "bg-blue-950/50"   },
+  { color: "text-purple-400", bg: "bg-purple-950/50" },
+  { color: "text-emerald-400",bg: "bg-emerald-950/50"},
+  { color: "text-rose-400",   bg: "bg-rose-950/50"   },
+  { color: "text-cyan-400",   bg: "bg-cyan-950/50"   },
+  { color: "text-yellow-400", bg: "bg-yellow-950/50" },
+  { color: "text-pink-400",   bg: "bg-pink-950/50"   },
+  { color: "text-sky-400",    bg: "bg-sky-950/50"    },
+  { color: "text-violet-400", bg: "bg-violet-950/50" },
+  { color: "text-lime-400",   bg: "bg-lime-950/50"   },
+  { color: "text-teal-400",   bg: "bg-teal-950/50"   },
+];
 
-function TokenIcon({ symbol, meta }: { symbol: string; meta: typeof ASSET_META[string] }) {
-  const base = symbol.split("/")[0];
+function symbolColor(sym: string) {
+  let h = 0;
+  for (let i = 0; i < sym.length; i++) h = (h * 31 + sym.charCodeAt(i)) >>> 0;
+  return PALETTE[h % PALETTE.length];
+}
+
+// ── Token icon with CDN lookup + monogram fallback ────────────────────────────
+// cryptocurrency-icons CDN covers 400+ tokens by lowercase ticker.
+// For anything not in the CDN (e.g. forex, metals), the img onError fires
+// and we render a clean text monogram instead.
+
+const CDN = "https://cdn.jsdelivr.net/npm/cryptocurrency-icons@0.18.1/svg/color";
+
+function TokenIcon({ base, assetType }: { base: string; assetType: string }) {
+  const { color, bg } = symbolColor(base);
+  const iconUrl = `${CDN}/${base.toLowerCase()}.svg`;
+
+  // For FX / metal / equity, skip the CDN attempt and go straight to monogram
+  const skipCDN = assetType !== "crypto";
 
   return (
-    <div className={`w-9 h-9 rounded-lg ${meta.bg} flex items-center justify-center overflow-hidden flex-shrink-0`}>
-      <img
-        src={meta.icon}
-        alt={base}
-        width={22}
-        height={22}
-        className="object-contain"
-        onError={(e) => {
-          // If CDN icon fails, replace with clean monogram text
-          const target = e.currentTarget;
-          target.style.display = "none";
-          const parent = target.parentElement;
-          if (parent && !parent.querySelector(".monogram")) {
-            const span = document.createElement("span");
-            span.className = `monogram text-xs font-bold tracking-wide ${meta.color}`;
-            span.textContent = base.slice(0, 3);
-            parent.appendChild(span);
-          }
-        }}
-      />
+    <div className={`w-9 h-9 rounded-lg ${bg} flex items-center justify-center overflow-hidden flex-shrink-0`}>
+      {skipCDN ? (
+        <span className={`text-xs font-bold tracking-wide ${color}`}>
+          {base.slice(0, 3)}
+        </span>
+      ) : (
+        <img
+          src={iconUrl}
+          alt={base}
+          width={22}
+          height={22}
+          className="object-contain"
+          onError={(e) => {
+            const target = e.currentTarget;
+            target.style.display = "none";
+            const parent = target.parentElement;
+            if (parent && !parent.querySelector(".monogram")) {
+              const span = document.createElement("span");
+              span.className = `monogram text-xs font-bold tracking-wide ${color}`;
+              span.textContent = base.slice(0, 3);
+              parent.appendChild(span);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -78,10 +93,9 @@ interface Props {
 }
 
 function PriceFeedCard({ price }: Props) {
-  const cardRef     = useRef<HTMLDivElement>(null);
+  const cardRef      = useRef<HTMLDivElement>(null);
   const prevFlashRef = useRef<number | null>(null);
 
-  const meta    = ASSET_META[price.symbol] ?? { icon: "", color: "text-slate-400", bg: "bg-slate-800/50" };
   const label   = confLabel(price.confPct);
   const colors  = CONF_COLORS[label];
   const pctDev  = price.prevPrice
@@ -94,17 +108,19 @@ function PriceFeedCard({ price }: Props) {
     if (price.flashAt === prevFlashRef.current) return;
     prevFlashRef.current = price.flashAt;
 
-    const el = cardRef.current;
+    const el        = cardRef.current;
     const flashClass = price.direction === "up" ? "flash-up" : "flash-down";
     el.classList.remove("flash-up", "flash-down");
-    void el.offsetWidth; // force reflow to restart animation
+    void el.offsetWidth;
     el.classList.add(flashClass);
     const timer = setTimeout(() => el.classList.remove(flashClass), 600);
     return () => clearTimeout(timer);
   }, [price.flashAt, price.direction]);
 
-  const barPct = Math.min((price.confPct / 1) * 100, 100);
-  const [base] = price.symbol.split("/");
+  const barPct    = Math.min((price.confPct / 1) * 100, 100);
+  const base      = price.base || price.symbol.split("/")[0];
+  const assetType = price.assetType ?? "crypto";
+  const typeBadge = TYPE_BADGE[assetType] ?? "bg-slate-800/60 text-slate-400 border-slate-700/50";
 
   return (
     <div
@@ -114,17 +130,23 @@ function PriceFeedCard({ price }: Props) {
       {/* Header row */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2.5">
-          <TokenIcon symbol={price.symbol} meta={meta} />
+          <TokenIcon base={base} assetType={assetType} />
           <div>
             <div className="font-semibold text-white text-sm leading-none mb-0.5">{base}</div>
             <div className="text-xs text-slate-500 font-mono">{price.symbol}</div>
           </div>
         </div>
 
-        {/* Timestamp */}
-        <span className="text-xs text-slate-600 font-mono tabular-nums">
-          {formatAge(price.publishTime)}
-        </span>
+        <div className="flex flex-col items-end gap-1">
+          {/* Asset type pill */}
+          <span className={`inline-flex text-[10px] px-1.5 py-0.5 rounded border font-medium uppercase tracking-wide ${typeBadge}`}>
+            {assetType}
+          </span>
+          {/* Timestamp */}
+          <span className="text-xs text-slate-600 font-mono tabular-nums">
+            {formatAge(price.publishTime)}
+          </span>
+        </div>
       </div>
 
       {/* Price + change row */}
@@ -137,11 +159,7 @@ function PriceFeedCard({ price }: Props) {
           <div className={`flex items-center gap-0.5 text-xs font-mono font-medium tabular-nums ${
             pctDev > 0 ? "text-emerald-400" : pctDev < 0 ? "text-red-400" : "text-slate-500"
           }`}>
-            <svg
-              className="w-2.5 h-2.5"
-              viewBox="0 0 10 10"
-              fill="currentColor"
-            >
+            <svg className="w-2.5 h-2.5" viewBox="0 0 10 10" fill="currentColor">
               {pctDev > 0
                 ? <polygon points="5,1 9,9 1,9" />
                 : pctDev < 0
@@ -154,7 +172,7 @@ function PriceFeedCard({ price }: Props) {
         )}
       </div>
 
-      {/* CI Section */}
+      {/* CI section */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <span className="text-xs text-slate-500">Confidence Interval</span>
@@ -163,7 +181,6 @@ function PriceFeedCard({ price }: Props) {
           </span>
         </div>
 
-        {/* CI bar */}
         <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full transition-all duration-500 ${colors.bar}`}
@@ -181,9 +198,9 @@ function PriceFeedCard({ price }: Props) {
         </div>
       </div>
 
-      {/* Update counter — visible on hover only */}
+      {/* Update counter — hover only */}
       {price.updateCount > 0 && (
-        <div className="absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+        <div className="absolute bottom-2.5 right-2.5 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
           <span className="text-xs text-slate-600 font-mono">{price.updateCount}×</span>
         </div>
       )}

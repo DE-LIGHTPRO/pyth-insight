@@ -1,19 +1,22 @@
 /**
- * Zustand price store — manages live Pyth price state
+ * Zustand price store — dynamic Pyth price state
  *
- * Strategy: REST polling every 500ms via Hermes /v2/updates/price/latest
- * This is more reliable than SSE for browser environments and gives
- * sub-second updates suitable for a live dashboard.
+ * Strategy:
+ *  1. On initStream(), call /api/feeds to discover EVERY available Pyth feed.
+ *  2. Split feed IDs into batches of BATCH_SIZE to stay within URL length limits.
+ *  3. Poll each batch at POLL_MS via Hermes /v2/updates/price/latest.
+ *  4. Merge results into a single prices map keyed by display symbol.
  *
  * NOTE: No "use client" — plain module, not a React component.
  */
 
-import { create } from "zustand";
+import { create }          from "zustand";
 import { type ParsedPrice } from "@/lib/pyth/hermes";
-import { RAW_IDS, ID_TO_SYMBOL } from "@/lib/pyth/price-ids";
+import { type FeedMeta }   from "@/app/api/feeds/route";
 
 const HERMES_BASE = "https://hermes.pyth.network";
-const POLL_MS     = 500; // poll every 500ms
+const POLL_MS     = 1000;   // 1-second poll — gives adequate real-time feel
+const BATCH_SIZE  = 50;     // IDs per REST request (keeps URL length safe)
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -22,48 +25,57 @@ export interface LivePrice extends ParsedPrice {
   direction:   "up" | "down" | null;
   flashAt:     number | null;
   updateCount: number;
+  assetType:   string;
+  base:        string;
 }
 
 export type StreamStatus = "idle" | "connecting" | "connected" | "error";
 
 interface PriceStore {
   prices:       Record<string, LivePrice>;
+  feeds:        FeedMeta[];               // full catalogue from /api/feeds
   status:       StreamStatus;
   lastUpdateAt: number | null;
   totalUpdates: number;
   sortBy:       "symbol" | "price" | "conf" | "change";
   sortDir:      "asc"   | "desc";
+  filterType:   string;                   // "all" | "crypto" | "fx" | "metal" | ...
 
   initStream:      () => void;
   cleanup:         () => void;
   setSortBy:       (key: PriceStore["sortBy"]) => void;
+  setFilterType:   (type: string) => void;
   getSortedPrices: () => LivePrice[];
-  _applyUpdates:   (incoming: ParsedPrice[]) => void;
+  _applyUpdates:   (incoming: ParsedPrice[], meta: Map<string, FeedMeta>) => void;
 }
 
-// ── Module-level poll timer (singleton) ───────────────────────────────────────
-let pollTimer: ReturnType<typeof setInterval> | null = null;
+// ── Module-level state (singleton) ────────────────────────────────────────────
+let pollTimers: ReturnType<typeof setInterval>[] = [];
+let feedMeta:   Map<string, FeedMeta>            = new Map(); // id → FeedMeta
 
 // ── URL builder ───────────────────────────────────────────────────────────────
 // NOTE: Do NOT use URLSearchParams for ids[] — it percent-encodes [ and ] to
 // %5B and %5D which Hermes does not recognise. Build the query string manually.
-function buildRestURL(): string {
-  const idsStr = RAW_IDS.map((id) => `ids[]=${id}`).join("&");
+function buildBatchURL(ids: string[]): string {
+  const idsStr = ids.map((id) => `ids[]=${id}`).join("&");
   return `${HERMES_BASE}/v2/updates/price/latest?${idsStr}&parsed=true&ignore_invalid_price_ids=true`;
 }
 
 // ── Price parser ──────────────────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseEntry(p: any): ParsedPrice {
+function parseEntry(p: any, meta: Map<string, FeedMeta>): ParsedPrice {
   const expo   = p.price.expo as number;
   const scale  = Math.pow(10, expo);
   const price  = Number(p.price.price) * scale;
   const conf   = Number(p.price.conf)  * scale;
   const eScale = Math.pow(10, p.ema_price.expo as number);
   const rawId  = (p.id as string).replace(/^0x/, "");
+  const feed   = meta.get(rawId);
+  const symbol = feed?.symbol ?? rawId.slice(0, 8) + "…";
+
   return {
     id:          p.id as string,
-    symbol:      ID_TO_SYMBOL[rawId] ?? rawId.slice(0, 8) + "…",
+    symbol,
     price,
     conf,
     confPct:     price > 0 ? (conf / price) * 100 : 0,
@@ -74,62 +86,98 @@ function parseEntry(p: any): ParsedPrice {
 }
 
 // ── Fetch one batch of prices ─────────────────────────────────────────────────
-async function fetchPrices(): Promise<ParsedPrice[]> {
-  const res  = await fetch(buildRestURL());
+async function fetchBatch(ids: string[], meta: Map<string, FeedMeta>): Promise<ParsedPrice[]> {
+  const res  = await fetch(buildBatchURL(ids));
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Hermes ${res.status}: ${text.slice(0, 120)}`);
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const data: { parsed?: any[] } = await res.json();
-  return (data.parsed ?? []).map(parseEntry);
+  return (data.parsed ?? []).map((p) => parseEntry(p, meta));
+}
+
+// ── Split array into chunks ────────────────────────────────────────────────────
+function chunks<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
 
 export const usePriceStore = create<PriceStore>((set, get) => ({
   prices:       {},
+  feeds:        [],
   status:       "idle",
   lastUpdateAt: null,
   totalUpdates: 0,
   sortBy:       "symbol",
   sortDir:      "asc",
+  filterType:   "all",
 
-  initStream: () => {
-    if (pollTimer)                    return; // already running
-    if (typeof window === "undefined") return; // server-side guard
+  initStream: async () => {
+    if (pollTimers.length > 0)          return; // already running
+    if (typeof window === "undefined")  return; // SSR guard
 
     set({ status: "connecting" });
 
-    // ── Run immediately, then on interval ────────────────────────────────────
-    const tick = () => {
-      fetchPrices()
-        .then((parsed) => {
-          get()._applyUpdates(parsed);
-          if (get().status !== "connected") set({ status: "connected" });
-        })
-        .catch((err: Error) => {
-          console.error("[PriceStore] fetch error:", err.message);
-          if (get().status !== "connected") set({ status: "error" });
-        });
-    };
+    try {
+      // ── Step 1: Discover all available feeds ────────────────────────────────
+      const res = await fetch("/api/feeds");
+      if (!res.ok) throw new Error(`/api/feeds returned ${res.status}`);
 
-    tick(); // immediate first load
-    pollTimer = setInterval(tick, POLL_MS);
+      const allFeeds: FeedMeta[] = await res.json();
+
+      // Build id → FeedMeta lookup
+      feedMeta = new Map(allFeeds.map((f) => [f.id, f]));
+
+      set({ feeds: allFeeds });
+
+      // ── Step 2: Batch the IDs ──────────────────────────────────────────────
+      const allIds    = allFeeds.map((f) => f.id);
+      const batches   = chunks(allIds, BATCH_SIZE);
+
+      // ── Step 3: Poll every batch ───────────────────────────────────────────
+      const tick = (batchIds: string[]) => () => {
+        fetchBatch(batchIds, feedMeta)
+          .then((parsed) => {
+            get()._applyUpdates(parsed, feedMeta);
+            if (get().status !== "connected") set({ status: "connected" });
+          })
+          .catch((err: Error) => {
+            console.error("[PriceStore] batch error:", err.message);
+            if (get().status !== "connected") set({ status: "error" });
+          });
+      };
+
+      // Fire first tick for each batch immediately (staggered by 50ms)
+      batches.forEach((batch, i) => {
+        setTimeout(tick(batch), i * 50);
+        const t = setInterval(tick(batch), POLL_MS);
+        pollTimers.push(t);
+      });
+
+    } catch (err) {
+      console.error("[PriceStore] init error:", err);
+      set({ status: "error" });
+    }
   },
 
   cleanup: () => {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    pollTimers.forEach(clearInterval);
+    pollTimers = [];
     set({ status: "idle" });
   },
 
-  _applyUpdates: (incoming) => {
+  _applyUpdates: (incoming, meta) => {
     set((state) => {
       const now     = Date.now();
       const updated = { ...state.prices };
 
       incoming.forEach((p) => {
         if (!p.symbol || p.symbol.includes("…")) return;
+        const feed      = meta.get(p.id.replace(/^0x/, ""));
         const prev      = updated[p.symbol] ?? null;
         const prevPrice = prev?.price ?? null;
         const direction =
@@ -144,6 +192,8 @@ export const usePriceStore = create<PriceStore>((set, get) => ({
           direction,
           flashAt:     prevPrice !== null && prevPrice !== p.price ? now : (prev?.flashAt ?? null),
           updateCount: (prev?.updateCount ?? 0) + 1,
+          assetType:   feed?.assetType ?? "other",
+          base:        feed?.base ?? p.symbol.split("/")[0],
         };
       });
 
@@ -155,26 +205,29 @@ export const usePriceStore = create<PriceStore>((set, get) => ({
     });
   },
 
-  cleanup_done: () => {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-    set({ status: "idle", prices: {} });
-  },
-
   setSortBy: (key) =>
     set((state) => ({
       sortBy:  key,
       sortDir: state.sortBy === key && state.sortDir === "asc" ? "desc" : "asc",
     })),
 
+  setFilterType: (type) => set({ filterType: type }),
+
   getSortedPrices: () => {
-    const { prices, sortBy, sortDir } = get();
-    const items = Object.values(prices);
+    const { prices, sortBy, sortDir, filterType } = get();
+    let items = Object.values(prices);
+
+    // Filter by asset type
+    if (filterType !== "all") {
+      items = items.filter((p) => p.assetType === filterType);
+    }
+
     items.sort((a, b) => {
       let cmp = 0;
       switch (sortBy) {
-        case "symbol":  cmp = a.symbol.localeCompare(b.symbol); break;
-        case "price":   cmp = a.price - b.price;                break;
-        case "conf":    cmp = a.confPct - b.confPct;            break;
+        case "symbol":  cmp = a.symbol.localeCompare(b.symbol);  break;
+        case "price":   cmp = a.price - b.price;                  break;
+        case "conf":    cmp = a.confPct - b.confPct;              break;
         case "change": {
           const da = p_delta(a), db = p_delta(b);
           cmp = da - db;

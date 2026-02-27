@@ -2,7 +2,7 @@ import PriceFeedGrid from "@/components/PriceFeedGrid";
 
 export const metadata = {
   title: "Live Price Feeds · Pyth Insight",
-  description: "Real-time Pyth price feeds for 20 assets with live confidence interval bands.",
+  description: "Real-time Pyth price feeds for all available assets with live confidence interval bands.",
 };
 
 export default function FeedsPage() {
@@ -15,13 +15,14 @@ export default function FeedsPage() {
             <span className="text-xs text-cyan-400 font-medium tracking-wide uppercase">
               Pyth Price Feeds
             </span>
-            <span className="text-xs text-slate-600">via Hermes · 500ms polling</span>
+            <span className="text-xs text-slate-600">via Hermes · 1s polling · all available feeds</span>
           </div>
           <h1 className="text-2xl font-bold text-white">Live Price Feeds</h1>
           <p className="text-slate-400 text-sm mt-1 max-w-xl">
-            Real-time prices for 18 assets polled directly from Pyth Hermes at 500ms intervals.
-            Each card shows the live price, confidence interval (±CI), and CI width as a
-            percentage — a narrower CI means the oracle is more certain of the price.
+            Every price feed available on Pyth Hermes — crypto, forex, metals and more —
+            polled live at 1-second intervals. Each card shows the live price, confidence
+            interval (±CI), and CI width as a percentage. A narrower CI means the oracle
+            is more certain of the price.
           </p>
         </div>
 

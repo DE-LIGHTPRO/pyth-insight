@@ -1,9 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { usePriceStore } from "@/lib/stores/priceStore";
-import { usePriceStream } from "@/hooks/usePriceStream";
-import PriceFeedCard from "@/components/PriceFeedCard";
+import { usePriceStore }     from "@/lib/stores/priceStore";
+import { usePriceStream }    from "@/hooks/usePriceStream";
+import PriceFeedCard          from "@/components/PriceFeedCard";
 
 type SortKey = "symbol" | "price" | "conf" | "change";
 
@@ -14,13 +14,25 @@ const SORT_LABELS: Record<SortKey, string> = {
   change: "Change",
 };
 
+// Asset type filter tabs
+const TYPE_FILTERS = [
+  { key: "all",    label: "All" },
+  { key: "crypto", label: "Crypto" },
+  { key: "fx",     label: "Forex" },
+  { key: "metal",  label: "Metals" },
+  { key: "equity", label: "Equities" },
+];
+
 export default function PriceFeedGrid() {
   const { status, totalUpdates } = usePriceStream();
-  const prices     = usePriceStore((s) => s.prices);
-  const sortBy     = usePriceStore((s) => s.sortBy);
-  const sortDir    = usePriceStore((s) => s.sortDir);
-  const setSortBy  = usePriceStore((s) => s.setSortBy);
-  const getSorted  = usePriceStore((s) => s.getSortedPrices);
+  const prices        = usePriceStore((s) => s.prices);
+  const sortBy        = usePriceStore((s) => s.sortBy);
+  const sortDir       = usePriceStore((s) => s.sortDir);
+  const filterType    = usePriceStore((s) => s.filterType);
+  const feeds         = usePriceStore((s) => s.feeds);
+  const setSortBy     = usePriceStore((s) => s.setSortBy);
+  const setFilterType = usePriceStore((s) => s.setFilterType);
+  const getSorted     = usePriceStore((s) => s.getSortedPrices);
 
   const [search, setSearch] = useState("");
 
@@ -29,13 +41,52 @@ export default function PriceFeedGrid() {
   const filtered = useMemo(() => {
     if (!search) return sortedPrices;
     const q = search.toLowerCase();
-    return sortedPrices.filter((p) => p.symbol.toLowerCase().includes(q));
+    return sortedPrices.filter(
+      (p) => p.symbol.toLowerCase().includes(q) || p.base.toLowerCase().includes(q)
+    );
   }, [sortedPrices, search]);
 
   const connected = Object.keys(prices).length;
+  const totalFeeds = feeds.length;
+
+  // Count per asset type (for tab badges)
+  const typeCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: connected };
+    Object.values(prices).forEach((p) => {
+      const t = p.assetType ?? "other";
+      counts[t] = (counts[t] ?? 0) + 1;
+    });
+    return counts;
+  }, [prices, connected]);
 
   return (
     <div>
+      {/* Asset type tabs */}
+      <div className="flex flex-wrap gap-1.5 mb-4">
+        {TYPE_FILTERS.map(({ key, label }) => {
+          const count = typeCounts[key] ?? 0;
+          if (key !== "all" && count === 0) return null; // hide empty categories
+          return (
+            <button
+              key={key}
+              onClick={() => setFilterType(key)}
+              className={`px-3 py-1.5 text-xs rounded-lg border transition-all font-medium ${
+                filterType === key
+                  ? "bg-purple-700 border-purple-600 text-white"
+                  : "bg-white/5 border-white/8 text-slate-400 hover:text-white hover:border-white/15"
+              }`}
+            >
+              {label}
+              {count > 0 && (
+                <span className={`ml-1.5 text-[10px] ${filterType === key ? "text-purple-200" : "text-slate-600"}`}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3 mb-6">
         {/* Search */}
@@ -45,7 +96,7 @@ export default function PriceFeedGrid() {
           </svg>
           <input
             type="text"
-            placeholder="Filter assets…"
+            placeholder="Search feeds…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-9 pr-3 py-2 text-sm bg-white/5 border border-white/8 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-purple-600 transition-colors"
@@ -74,16 +125,28 @@ export default function PriceFeedGrid() {
 
         {/* Status pill */}
         <div className="ml-auto flex items-center gap-2">
-          <StatusPill status={status} connected={connected} totalUpdates={totalUpdates} />
+          <StatusPill
+            status={status}
+            connected={connected}
+            totalFeeds={totalFeeds}
+            totalUpdates={totalUpdates}
+          />
         </div>
       </div>
 
-      {/* Loading state */}
+      {/* Loading / skeleton state */}
       {connected === 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {Array.from({ length: 12 }).map((_, i) => (
-            <SkeletonCard key={i} />
-          ))}
+        <div>
+          <p className="text-xs text-slate-500 mb-4">
+            {totalFeeds > 0
+              ? `Fetching prices for ${totalFeeds} feeds…`
+              : "Discovering available Pyth feeds…"}
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {Array.from({ length: 16 }).map((_, i) => (
+              <SkeletonCard key={i} />
+            ))}
+          </div>
         </div>
       )}
 
@@ -98,7 +161,7 @@ export default function PriceFeedGrid() {
 
           {filtered.length === 0 && (
             <div className="text-center py-16 text-slate-500">
-              No assets match &ldquo;{search}&rdquo;
+              No feeds match &ldquo;{search}&rdquo;
             </div>
           )}
         </>
@@ -107,22 +170,24 @@ export default function PriceFeedGrid() {
   );
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Sub-components ─────────────────────────────────────────────────────────────
 
 function StatusPill({
   status,
   connected,
+  totalFeeds,
   totalUpdates,
 }: {
   status: string;
   connected: number;
+  totalFeeds: number;
   totalUpdates: number;
 }) {
   if (status === "connecting" || connected === 0) {
     return (
       <div className="flex items-center gap-1.5 text-xs text-amber-400">
         <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-        Connecting to Pyth Hermes…
+        {totalFeeds > 0 ? `Loading ${totalFeeds} feeds…` : "Connecting to Pyth Hermes…"}
       </div>
     );
   }
