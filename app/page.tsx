@@ -172,7 +172,7 @@ export default function Home() {
       {/* ── Stats bar ─────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-3 gap-px rounded-xl overflow-hidden border border-white/8 bg-white/8 mb-16">
         {[
-          { value: "1,800+",  label: "Live feeds"            },
+          { value: "1,400+",  label: "Live feeds"            },
           { value: "3s",      label: "Price update interval" },
           { value: "0–100",   label: "Calibration score"     },
         ].map((s) => (

@@ -138,6 +138,13 @@ async function* streamGemini(
         body: JSON.stringify({
           contents,
           generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
+          // Disable safety filters for financial/analytical content
+          safetySettings: [
+            { category: "HARM_CATEGORY_HARASSMENT",        threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_HATE_SPEECH",       threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+          ],
         }),
         signal: AbortSignal.timeout(20000),
       }
@@ -161,7 +168,14 @@ async function* streamGemini(
     throw new Error(`Gemini returned no response (${reason}). Check GEMINI_API_KEY validity.`);
   }
 
+  // Surface non-STOP finish reasons (SAFETY, RECITATION, MAX_TOKENS, etc.)
+  const finishReason = candidate?.finishReason;
+  if (finishReason && finishReason !== "STOP" && finishReason !== "MAX_TOKENS") {
+    throw new Error(`Gemini stopped generating (${finishReason}) — response may have been filtered.`);
+  }
+
   const text = candidate?.content?.parts?.[0]?.text ?? "";
+  if (!text) throw new Error("Gemini returned an empty response. Try rephrasing your question.");
 
   // Simulate streaming — yield in ~50-char chunks so the UI feels responsive
   const chunkSize = 50;
