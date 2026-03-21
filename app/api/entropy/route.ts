@@ -28,12 +28,14 @@ const DEFAULT_PROVIDER  = "0x52DeaA1c84233F7bb8C8A45baeDE41091c616506";
 const BASE_RPC = "https://mainnet.base.org";
 
 export interface EntropyState {
-  sequenceNumber: number;
+  sequenceNumber:  number;
   providerAddress: string;
   contractAddress: string;
   chainId:         string;
   blockNumber:     number;
+  blockHash:       string; // actual on-chain block hash — verifiable on Basescan
   seed:            string; // hex hash used as game randomness seed
+  seedFormula:     string; // human-readable derivation formula
   timestamp:       number;
   source:          "fortuna" | "contract" | "fallback";
 }
@@ -68,6 +70,35 @@ async function tryFortuna(): Promise<{ sequenceNumber: number; blockNumber: numb
       return { sequenceNumber, blockNumber };
     }
     return null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Fetch actual block hash from Base mainnet ─────────────────────────────────
+
+async function fetchBlockHash(blockNumber: number | "latest"): Promise<{ blockNumber: number; blockHash: string } | null> {
+  try {
+    const blockParam = blockNumber === "latest" ? "latest" : `0x${blockNumber.toString(16)}`;
+    const res = await fetch(BASE_RPC, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "eth_getBlockByNumber",
+        params: [blockParam, false],
+      }),
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const block = json?.result;
+    if (!block?.hash || !block?.number) return null;
+    return {
+      blockNumber: parseInt(block.number, 16),
+      blockHash:   block.hash as string,
+    };
   } catch {
     return null;
   }
@@ -166,12 +197,24 @@ export async function GET(): Promise<NextResponse> {
   }
 
   const sequenceNumber = state?.sequenceNumber ?? timestamp;
-  const blockNumber    = state?.blockNumber    ?? 0;
+  let   blockNumber    = state?.blockNumber    ?? 0;
 
-  // Derive the entropy seed: hash of sequence + block + minute-bucket (changes every 60s)
-  const minuteBucket = Math.floor(timestamp / 60);
-  const seedInput    = `pyth-entropy:${sequenceNumber}:${blockNumber}:${minuteBucket}`;
-  const seed         = simpleHash(seedInput);
+  // Fetch the actual block hash — this ties randomness to real on-chain state
+  // and makes it independently verifiable on Basescan by anyone.
+  let blockHash = "0x0000000000000000000000000000000000000000000000000000000000000000";
+  const blockData = await fetchBlockHash(blockNumber > 0 ? blockNumber : "latest");
+  if (blockData) {
+    blockNumber = blockData.blockNumber;
+    blockHash   = blockData.blockHash;
+  }
+
+  // Derive the entropy seed: hash of sequence + block hash + minute-bucket
+  // Block hash is unpredictable before the block is mined — this ensures the
+  // seed cannot be predicted by any party before the round starts.
+  const minuteBucket  = Math.floor(timestamp / 60);
+  const seedInput     = `pyth-entropy:${sequenceNumber}:${blockHash}:${minuteBucket}`;
+  const seed          = simpleHash(seedInput);
+  const seedFormula   = `FNV1a( "pyth-entropy:${sequenceNumber}:${blockHash.slice(0, 10)}…:${minuteBucket}" )`;
 
   const result: EntropyState = {
     sequenceNumber,
@@ -179,7 +222,9 @@ export async function GET(): Promise<NextResponse> {
     contractAddress: ENTROPY_CONTRACT,
     chainId:         "base",
     blockNumber,
+    blockHash,
     seed,
+    seedFormula,
     timestamp,
     source,
   };

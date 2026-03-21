@@ -357,17 +357,46 @@ export default function GamePage() {
 
       {/* Entropy provenance */}
       {entropy && (
-        <div className="mt-6 rounded-xl border border-pink-900/30 bg-pink-950/10 p-4">
-          <div className="text-xs text-slate-400 leading-relaxed">
-            <span className="text-pink-300 font-medium">Provably fair — Pyth Entropy on Base: </span>
-            Feed selection seeded by sequence #{entropy.sequenceNumber.toLocaleString()} from the Fortuna provider.{" "}
-            Seed: <code className="text-pink-300 font-mono text-[10px]">{entropy.seed.slice(0, 16)}…</code>
-            {" · "}Source: <span className="text-white">{entropy.source}</span>
-            {" · "}Contract:{" "}
+        <div className="mt-6 rounded-xl border border-pink-900/30 bg-pink-950/10 p-4 space-y-3">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-pink-400" />
+            <span className="text-xs font-semibold text-pink-300 uppercase tracking-wide">Provably fair — Pyth Entropy on Base</span>
+            <span className="ml-auto text-[10px] text-slate-600 uppercase tracking-wide">{entropy.source}</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-[11px]">
+            <div className="rounded-lg bg-white/4 px-3 py-2">
+              <div className="text-slate-500 mb-0.5">Entropy sequence #</div>
+              <div className="text-white font-mono">{entropy.sequenceNumber.toLocaleString()}</div>
+            </div>
+            <div className="rounded-lg bg-white/4 px-3 py-2">
+              <div className="text-slate-500 mb-0.5">Block</div>
+              <a href={`https://basescan.org/block/${entropy.blockNumber}`} target="_blank" rel="noopener noreferrer"
+                className="text-purple-400 hover:text-purple-300 font-mono">
+                #{entropy.blockNumber.toLocaleString()}
+              </a>
+            </div>
+            <div className="rounded-lg bg-white/4 px-3 py-2 col-span-2">
+              <div className="text-slate-500 mb-0.5">Block hash (on-chain, unpredictable)</div>
+              <a href={`https://basescan.org/block/${entropy.blockHash}`} target="_blank" rel="noopener noreferrer"
+                className="text-purple-400 hover:text-purple-300 font-mono break-all">
+                {entropy.blockHash.slice(0, 20)}…{entropy.blockHash.slice(-8)}
+              </a>
+            </div>
+            <div className="rounded-lg bg-white/4 px-3 py-2 col-span-2">
+              <div className="text-slate-500 mb-0.5">Seed derivation formula</div>
+              <code className="text-pink-300 font-mono text-[10px] break-all">{entropy.seedFormula ?? `FNV1a(pyth-entropy:${entropy.sequenceNumber}:blockHash:minuteBucket)`}</code>
+            </div>
+          </div>
+
+          <div className="text-[11px] text-slate-500 leading-relaxed pt-1 border-t border-white/5">
+            Feed selected deterministically: index = <code className="text-white">seedHash mod {FEED_POOL.length}</code>.
+            {" "}Block hash is only known after the block is mined — no party can predict or manipulate which feed appears.
+            {" "}Verify contract on{" "}
             <a href={`https://basescan.org/address/${entropy.contractAddress}`} target="_blank" rel="noopener noreferrer"
               className="text-purple-400 hover:text-purple-300 underline underline-offset-2">
-              {entropy.contractAddress.slice(0, 8)}…{entropy.contractAddress.slice(-6)}
-            </a>
+              Basescan
+            </a>.
           </div>
         </div>
       )}

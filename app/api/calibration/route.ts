@@ -13,6 +13,25 @@ export const runtime = "nodejs";
 // makes ~168 HTTP calls batched 25 at a time → ~3-4 seconds.
 export const maxDuration = 60;
 
+// ── Server-side in-memory cache ───────────────────────────────────────────────
+// Prevents repeated Benchmarks API calls for the same query within the same
+// warm Vercel function instance. TTL = 10 minutes (matches Cache-Control header).
+
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
+interface CacheEntry {
+  result: CalibrationResult & { sampleSize: number };
+  expiresAt: number;
+}
+
+const calibrationCache = new Map<string, CacheEntry>();
+
+function cacheKey(symbol: string, days: number, horizon: number): string {
+  return `${symbol}:${days}:${horizon}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const { searchParams } = req.nextUrl;
 
@@ -27,6 +46,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
   // Benchmarks API accepts ID with or without 0x; strip to be safe
   const priceId = rawIdWithPrefix.replace(/^0x/, "");
+
+  // ── Check in-memory cache ────────────────────────────────────────────────────
+  const key = cacheKey(symbol, days, horizon);
+  const cached = calibrationCache.get(key);
+  if (cached && Date.now() < cached.expiresAt) {
+    return NextResponse.json(cached.result, {
+      headers: {
+        "Cache-Control": "public, s-maxage=600, stale-while-revalidate=300",
+        "X-Cache": "HIT",
+      },
+    });
+  }
 
   // ── Time range ──────────────────────────────────────────────────────────────
   const now  = Math.floor(Date.now() / 1000);
@@ -60,10 +91,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       sampleSize: snapshots.length,
     };
 
+    // Store in cache
+    calibrationCache.set(key, { result, expiresAt: Date.now() + CACHE_TTL_MS });
+
     return NextResponse.json(result, {
       headers: {
         // Cache for 10 minutes — Benchmarks data is historical
         "Cache-Control": "public, s-maxage=600, stale-while-revalidate=300",
+        "X-Cache": "MISS",
       },
     });
   } catch (err) {
