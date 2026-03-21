@@ -214,11 +214,20 @@ async function tryEthLogs(): Promise<{
           data: string; topics: string[]; blockNumber: string;
         }>;
 
-        // RevealedWithCallback: data = exactly 352 bytes (706 hex chars incl. "0x")
+        // RevealedWithCallback / Revealed: data = exactly 352 bytes (706 hex chars incl. "0x")
         // No indexed params → topics has exactly 1 entry (the event sig hash)
-        const revealedLogs = logs.filter(
+        // Primary filter: exact 706 chars, single topic
+        let revealedLogs = logs.filter(
           (log) => log.data?.length === EXPECTED_LEN && log.topics?.length === 1
         );
+
+        // Fallback filter: accept any log with ≥ 300 bytes of data (likely a reveal event)
+        // This handles minor ABI variations across contract versions
+        if (revealedLogs.length === 0) {
+          revealedLogs = logs.filter(
+            (log) => log.data && log.data.length >= 2 + 300 * 2
+          );
+        }
 
         if (revealedLogs.length === 0) {
           // If we got logs but none matched, wider range won't help — try next RPC
