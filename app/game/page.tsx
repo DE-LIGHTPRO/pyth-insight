@@ -42,6 +42,30 @@ interface RoundResult {
   correct: boolean; delta: number; pointsGained: number;
 }
 
+interface LeaderboardEntry {
+  score: number; rounds: number; date: string;
+}
+
+const LEADERBOARD_KEY = "pyth-oracle-leaderboard";
+const LEADERBOARD_MAX = 5;
+
+function loadLeaderboard(): LeaderboardEntry[] {
+  try {
+    const raw = localStorage.getItem(LEADERBOARD_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveToLeaderboard(score: number, rounds: number) {
+  if (score <= 0) return;
+  try {
+    const entries = loadLeaderboard();
+    entries.push({ score, rounds, date: new Date().toLocaleDateString() });
+    entries.sort((a, b) => b.score - a.score);
+    localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(entries.slice(0, LEADERBOARD_MAX)));
+  } catch { /* localStorage unavailable */ }
+}
+
 function seedToIndex(seed: string, length: number, offset: number = 0): number {
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = ((h << 5) - h + seed.charCodeAt(i)) | 0;
@@ -103,9 +127,10 @@ export default function GamePage() {
   const [countdown,  setCountdown]  = useState(ROUND_DURATION);
   const [lastResult, setLastResult] = useState<RoundResult | null>(null);
   const [history,    setHistory]    = useState<RoundResult[]>([]);
-  const [score,      setScore]      = useState(0);
-  const [streak,     setStreak]     = useState(0);
-  const [error,      setError]      = useState<string | null>(null);
+  const [score,       setScore]       = useState(0);
+  const [streak,      setStreak]      = useState(0);
+  const [error,       setError]       = useState<string | null>(null);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const timerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const hasStarted = useRef(false);
   const streakRef  = useRef(0);
@@ -148,7 +173,8 @@ export default function GamePage() {
     const ae  = ent ?? prev ?? { sequenceNumber: Date.now(), providerAddress: "fallback",
       contractAddress: "0x98046Bd286715D3B0BC227Dd7a956b83D8978603", chainId: "base",
       blockNumber: 0, blockHash: "0x0000000000000000000000000000000000000000000000000000000000000000",
-      seed: Date.now().toString(16), seedFormula: "fallback", timestamp: Math.floor(Date.now() / 1000), source: "fallback" as const };
+      seed: Date.now().toString(16), seedFormula: "fallback", timestamp: Math.floor(Date.now() / 1000),
+      source: "fallback" as const, isRealEntropy: false };
     setEntropy(ae);
     const chosen = FEED_POOL[seedToIndex(ae.seed, FEED_POOL.length, round) % FEED_POOL.length];
     setFeed(chosen);
@@ -178,6 +204,7 @@ export default function GamePage() {
   useEffect(() => {
     if (hasStarted.current) return;
     hasStarted.current = true;
+    setLeaderboard(loadLeaderboard());
     startRound(1, null);
     return () => { timerRef.current && clearInterval(timerRef.current); };
   }, []); // eslint-disable-line
@@ -330,10 +357,37 @@ export default function GamePage() {
             <button onClick={nextRound} className="flex-1 py-3 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-semibold text-sm transition flex items-center justify-center gap-2">
               Next round →
             </button>
-            <button onClick={() => { setScore(0); setStreak(0); setHistory([]); setRoundNum(1); startRound(1, entropy); }}
+            <button onClick={() => {
+              saveToLeaderboard(score, roundNum);
+              setLeaderboard(loadLeaderboard());
+              setScore(0); setStreak(0); setHistory([]); setRoundNum(1); startRound(1, entropy);
+            }}
               className="px-4 py-3 rounded-xl bg-white/5 hover:bg-white/8 text-slate-400 hover:text-white font-medium text-sm transition">
-              Restart
+              Save & Restart
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Leaderboard */}
+      {leaderboard.length > 0 && (
+        <div className="mt-6 rounded-xl border border-amber-900/30 bg-amber-950/10 overflow-hidden">
+          <div className="px-5 py-3 border-b border-white/6 flex items-center gap-2">
+            <span className="text-amber-400 text-sm">🏆</span>
+            <span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">High Scores</span>
+            <span className="ml-auto text-[10px] text-slate-600">saved locally</span>
+          </div>
+          <div className="divide-y divide-white/4">
+            {leaderboard.map((e, i) => (
+              <div key={i} className="flex items-center gap-4 px-5 py-2.5">
+                <span className={`text-xs font-bold w-4 ${i === 0 ? "text-amber-400" : i === 1 ? "text-slate-400" : i === 2 ? "text-orange-600" : "text-slate-600"}`}>
+                  {i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i+1}`}
+                </span>
+                <span className="text-white font-mono font-bold text-sm">{e.score} pts</span>
+                <span className="text-slate-500 text-xs">{e.rounds} rounds</span>
+                <span className="ml-auto text-slate-600 text-xs">{e.date}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -358,16 +412,47 @@ export default function GamePage() {
 
       {/* Entropy provenance */}
       {entropy && (
-        <div className="mt-6 rounded-xl border border-pink-900/30 bg-pink-950/10 p-4 space-y-3">
+        <div className={`mt-6 rounded-xl border p-4 space-y-3 ${
+          entropy.isRealEntropy
+            ? "border-emerald-800/40 bg-emerald-950/10"
+            : "border-pink-900/30 bg-pink-950/10"
+        }`}>
+          {/* Header */}
           <div className="flex items-center gap-2 mb-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-pink-400" />
-            <span className="text-xs font-semibold text-pink-300 uppercase tracking-wide">Provably fair — Pyth Entropy on Base</span>
+            <span className={`w-1.5 h-1.5 rounded-full ${entropy.isRealEntropy ? "bg-emerald-400" : "bg-pink-400"}`} />
+            <span className={`text-xs font-semibold uppercase tracking-wide ${entropy.isRealEntropy ? "text-emerald-300" : "text-pink-300"}`}>
+              Pyth Entropy · Base mainnet
+            </span>
+            {entropy.isRealEntropy ? (
+              <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 uppercase tracking-wide">
+                ✓ Real Entropy
+              </span>
+            ) : (
+              <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 border border-amber-500/30 text-amber-400 uppercase tracking-wide">
+                Derived
+              </span>
+            )}
             <span className="ml-auto text-[10px] text-slate-600 uppercase tracking-wide">{entropy.source}</span>
           </div>
 
+          {/* Real entropy: show the actual revealed random bytes */}
+          {entropy.isRealEntropy && entropy.revelationBytes && (
+            <div className="rounded-lg border border-emerald-800/30 bg-emerald-950/20 px-3 py-2.5">
+              <div className="text-[10px] text-emerald-600 mb-1 font-medium uppercase tracking-wide">
+                Actual Pyth Entropy Revealed Random — Sequence #{(entropy.revSequence ?? 0).toLocaleString()}
+              </div>
+              <code className="text-emerald-300 font-mono text-[11px] break-all">
+                {entropy.revelationBytes}
+              </code>
+              <div className="text-[10px] text-slate-600 mt-1">
+                keccak256(userRandom ⊕ providerRandom) — committed on-chain before revelation
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-2 text-[11px]">
             <div className="rounded-lg bg-white/4 px-3 py-2">
-              <div className="text-slate-500 mb-0.5">Entropy sequence #</div>
+              <div className="text-slate-500 mb-0.5">Provider sequence #</div>
               <div className="text-white font-mono">{entropy.sequenceNumber.toLocaleString()}</div>
             </div>
             <div className="rounded-lg bg-white/4 px-3 py-2">
@@ -378,22 +463,24 @@ export default function GamePage() {
               </a>
             </div>
             <div className="rounded-lg bg-white/4 px-3 py-2 col-span-2">
-              <div className="text-slate-500 mb-0.5">Block hash (on-chain, unpredictable)</div>
+              <div className="text-slate-500 mb-0.5">Block hash</div>
               <a href={`https://basescan.org/block/${entropy.blockHash}`} target="_blank" rel="noopener noreferrer"
                 className="text-purple-400 hover:text-purple-300 font-mono break-all">
                 {entropy.blockHash.slice(0, 20)}…{entropy.blockHash.slice(-8)}
               </a>
             </div>
             <div className="rounded-lg bg-white/4 px-3 py-2 col-span-2">
-              <div className="text-slate-500 mb-0.5">Seed derivation formula</div>
-              <code className="text-pink-300 font-mono text-[10px] break-all">{entropy.seedFormula ?? `FNV1a(pyth-entropy:${entropy.sequenceNumber}:blockHash:minuteBucket)`}</code>
+              <div className="text-slate-500 mb-0.5">Seed formula</div>
+              <code className="text-pink-300 font-mono text-[10px] break-all">{entropy.seedFormula}</code>
             </div>
           </div>
 
           <div className="text-[11px] text-slate-500 leading-relaxed pt-1 border-t border-white/5">
-            Feed selected deterministically: index = <code className="text-white">seedHash mod {FEED_POOL.length}</code>.
-            {" "}Block hash is only known after the block is mined — no party can predict or manipulate which feed appears.
-            {" "}Verify contract on{" "}
+            {entropy.isRealEntropy
+              ? <>Feed index = <code className="text-white">revelationBytes mod {FEED_POOL.length}</code>. These random bytes were generated by the Pyth Fortuna provider via commit-reveal — neither the user nor the provider could have predicted the result before both committed. </>
+              : <>Feed index = <code className="text-white">FNV1a(seq + blockHash) mod {FEED_POOL.length}</code>. Block hash is only known after mining — no party can predict the feed in advance. </>
+            }
+            Verify contract on{" "}
             <a href={`https://basescan.org/address/${entropy.contractAddress}`} target="_blank" rel="noopener noreferrer"
               className="text-purple-400 hover:text-purple-300 underline underline-offset-2">
               Basescan
@@ -404,12 +491,15 @@ export default function GamePage() {
 
       {/* How it works */}
       <div className="mt-6 rounded-xl border border-white/8 bg-[rgb(17,17,25)] p-5">
-        <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">How it works</div>
+        <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">How Pyth Entropy makes this provably fair</div>
         <div className="grid sm:grid-cols-3 gap-4">
           {[
-            { n:"1", c:"text-pink-400",    t:"Entropy seeds selection",   d:"Pyth Entropy's sequence number on Base deterministically picks which of 12 feeds to show each round — verifiable on-chain." },
-            { n:"2", c:"text-purple-400",  t:"You see the live CI",       d:"Pyth publishes a real-time confidence interval with every price update. A wider CI = more oracle uncertainty in that moment." },
-            { n:"3", c:"text-emerald-400", t:"Oracle decides the outcome", d:"After your bet, the next published Pyth Hermes price determines if the move was inside or outside the confidence interval." },
+            { n:"1", c:"text-pink-400",    t:"Commit-reveal protocol",
+              d:"Pyth Entropy uses a two-party commit-reveal scheme on Base. Both the user and the Fortuna provider commit a hash of their random number before either reveals — making collusion impossible." },
+            { n:"2", c:"text-purple-400",  t:"Verifiable on-chain",
+              d:"The revealed randomness (keccak256 of XOR'd secrets) is emitted as a RevealedWithCallback event. Anyone can verify the exact bytes used to seed this game on Basescan." },
+            { n:"3", c:"text-emerald-400", t:"Oracle decides outcome",
+              d:"After the feed is selected, you bet on whether the next Pyth Hermes price lands inside or outside the live confidence interval. Pyth — not the app — determines the result." },
           ].map((s) => (
             <div key={s.n} className="flex gap-3">
               <div className={`flex-shrink-0 w-5 h-5 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-xs font-bold ${s.c}`}>{s.n}</div>

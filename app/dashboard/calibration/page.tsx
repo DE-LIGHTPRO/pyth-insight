@@ -316,8 +316,8 @@ export default function CalibrationPage() {
             </p>
           </div>
           <div className="mt-2 text-xs text-slate-600 max-w-sm leading-relaxed">
-            Data is fetched live from <code className="text-slate-500">benchmarks.pyth.network</code> —
-            the first public calibration measurement of the Pyth oracle.
+            Fetches historical snapshots from <code className="text-slate-500">hermes.pyth.network</code> and
+            tests whether Pyth&apos;s published ±1σ CI captures 68.3% of real price moves — the first public empirical backtest of the Pyth oracle.
           </div>
         </div>
       )}

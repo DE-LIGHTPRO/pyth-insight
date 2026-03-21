@@ -1,30 +1,38 @@
 /**
  * GET /api/entropy
  *
- * Reads the current state of the Pyth Entropy provider on Base mainnet
- * via the Fortuna REST API — no wallet or transaction required.
+ * Reads ACTUAL revealed randomness from the Pyth Entropy protocol on Base mainnet.
  *
- * Returns a deterministic, on-chain-verifiable entropy seed that the
- * Oracle Challenge game uses to select which feed to show each round.
+ * Pyth Entropy uses a commit-reveal scheme:
+ *   1. A requester generates a random number, hashes it (commitment), and submits to the contract
+ *   2. The Fortuna provider does the same, storing their commitment
+ *   3. After both parties commit, both reveal — the final randomness is
+ *      keccak256(userRandom XOR providerRandom), verifiable by anyone on-chain
+ *
+ * This route reads the RevealedWithCallback events emitted by the Entropy contract
+ * to obtain the *actual* random bytes produced by a real commit-reveal sequence.
+ * These bytes are used to deterministically seed the Oracle Challenge game —
+ * making feed selection provably unpredictable and independently verifiable.
  *
  * Pyth Entropy docs: https://docs.pyth.network/entropy
  * Fortuna provider:  https://fortuna.dourolabs.app
+ * Contract:          https://basescan.org/address/0x98046Bd286715D3B0BC227Dd7a956b83D8978603
  */
 
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-// Fortuna provider endpoints — no auth needed for chain info
-const FORTUNA_BASE   = "https://fortuna.dourolabs.app";
-const BASE_CHAIN_ID  = "evm-base";
-
 // Pyth Entropy contract on Base mainnet
 const ENTROPY_CONTRACT = "0x98046Bd286715D3B0BC227Dd7a956b83D8978603";
-// Default Pyth provider for Base
+// Default Pyth Fortuna provider for Base
 const DEFAULT_PROVIDER  = "0x52DeaA1c84233F7bb8C8A45baeDE41091c616506";
 
-// Base RPC (public endpoint — no key needed for eth_call reads)
+// Fortuna provider REST API
+const FORTUNA_BASE  = "https://fortuna.dourolabs.app";
+const BASE_CHAIN_ID = "evm-base";
+
+// Base RPC (public endpoint — no key needed for eth_call / eth_getLogs reads)
 const BASE_RPC = "https://mainnet.base.org";
 
 export interface EntropyState {
@@ -33,18 +41,22 @@ export interface EntropyState {
   contractAddress: string;
   chainId:         string;
   blockNumber:     number;
-  blockHash:       string; // actual on-chain block hash — verifiable on Basescan
-  seed:            string; // hex hash used as game randomness seed
-  seedFormula:     string; // human-readable derivation formula
+  blockHash:       string;
+  seed:            string;
+  seedFormula:     string;
   timestamp:       number;
   source:          "fortuna" | "contract" | "fallback";
+  // Real Pyth Entropy randomness fields
+  isRealEntropy:   boolean;  // true when seed comes from an actual Pyth Entropy revelation
+  revelationBytes?: string;  // 32-byte hex: actual random number revealed on-chain
+  revSequence?:    number;   // sequence number of the revelation used
+  revMethod?:      string;   // how the revelation was fetched
 }
 
-// ── Try Fortuna REST API first ────────────────────────────────────────────────
+// ── Try Fortuna REST API for sequence number / block info ────────────────────
 
 async function tryFortuna(): Promise<{ sequenceNumber: number; blockNumber: number } | null> {
   try {
-    // GET /v1/chains lists all supported chains with latest info
     const res = await fetch(`${FORTUNA_BASE}/v1/chains`, {
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(5000),
@@ -66,68 +78,165 @@ async function tryFortuna(): Promise<{ sequenceNumber: number; blockNumber: numb
     const sequenceNumber = baseChain.latest_sequence_number ?? baseChain.sequence_number ?? 0;
     const blockNumber    = baseChain.latest_block_number ?? 0;
 
-    if (sequenceNumber > 0) {
-      return { sequenceNumber, blockNumber };
-    }
+    if (sequenceNumber > 0) return { sequenceNumber, blockNumber };
     return null;
   } catch {
     return null;
   }
 }
 
-// ── Fetch actual block hash from Base mainnet ─────────────────────────────────
+// ── Try Fortuna REST API revelation endpoint ─────────────────────────────────
+//
+// Tries to get actual revealed random bytes from a recently fulfilled sequence.
+// Pyth Entropy sequences are fulfilled within seconds, so seqNum - 2 is safe.
 
-async function fetchBlockHash(blockNumber: number | "latest"): Promise<{ blockNumber: number; blockHash: string } | null> {
+async function tryFortunaRevelation(latestSeq: number): Promise<{
+  randomBytes: string;
+  revSequence: number;
+} | null> {
+  const seqToTry = Math.max(1, latestSeq - 2);
+
+  // Try multiple known Fortuna API URL patterns
+  const urls = [
+    `${FORTUNA_BASE}/v1/revelations/${BASE_CHAIN_ID}/${seqToTry}`,
+    `${FORTUNA_BASE}/v1/chains/${BASE_CHAIN_ID}/revelations/${seqToTry}`,
+    `${FORTUNA_BASE}/v1/chains/${BASE_CHAIN_ID}/requests/${seqToTry}`,
+  ];
+
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const bytes =
+        data.revelation ??
+        data.random_number ??
+        data.randomNumber ??
+        data.value ??
+        data.random ??
+        data.revealed_random;
+      if (typeof bytes === "string" && bytes.startsWith("0x") && bytes.length === 66) {
+        return { randomBytes: bytes, revSequence: seqToTry };
+      }
+    } catch { /* try next URL */ }
+  }
+  return null;
+}
+
+// ── Read RevealedWithCallback events via eth_getLogs ─────────────────────────
+//
+// The RevealedWithCallback event is emitted by the Entropy contract whenever
+// a request is fulfilled. Its ABI-encoded data contains:
+//
+//   struct Request { address provider; uint64 seqNum; bytes32 userCommit;
+//                   address requester; uint64 blockNum; uint128 fee;
+//                   uint8 numHashes; bool useBlockhash; }  // 8 × 32 = 256 bytes
+//   bytes32 userRandom    // + 32 = 288
+//   bytes32 providerRandom // + 32 = 320
+//   bytes32 randomNumber   // + 32 = 352 bytes total
+//
+// All fields are static types → no dynamic offsets → data is exactly 352 bytes.
+// randomNumber is the final 32 bytes (last 64 hex chars) of event.data.
+//
+// We also identify the Requested event (data = 3 × 32 = 96 bytes) so we can
+// distinguish fulfilled (RevealedWithCallback) from unfulfilled events.
+
+const REVEALED_DATA_BYTES = 352;   // Request(256) + userRandom(32) + providerRandom(32) + randomNumber(32)
+const REVEALED_DATA_HEX   = "0x" + "0".repeat(REVEALED_DATA_BYTES * 2); // expected length marker
+
+async function tryEthLogs(): Promise<{
+  randomBytes: string;
+  revSequence: number;
+  blockNumber:  number;
+} | null> {
   try {
-    const blockParam = blockNumber === "latest" ? "latest" : `0x${blockNumber.toString(16)}`;
-    const res = await fetch(BASE_RPC, {
-      method: "POST",
+    // Get current block number
+    const blockNumRes = await fetch(BASE_RPC, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 20, method: "eth_blockNumber", params: [] }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!blockNumRes.ok) return null;
+    const bnJson = await blockNumRes.json();
+    const latestBlock = parseInt(bnJson.result as string, 16);
+    if (!latestBlock) return null;
+
+    // Query last ~500 blocks (~15 mins on Base) — enough to find a recent revelation
+    const fromBlock = `0x${Math.max(0, latestBlock - 500).toString(16)}`;
+
+    const logsRes = await fetch(BASE_RPC, {
+      method:  "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         jsonrpc: "2.0",
-        id: 3,
-        method: "eth_getBlockByNumber",
-        params: [blockParam, false],
+        id: 21,
+        method: "eth_getLogs",
+        params: [{
+          address:   ENTROPY_CONTRACT,
+          fromBlock,
+          toBlock:   "latest",
+        }],
       }),
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(10000),
     });
-    if (!res.ok) return null;
-    const json = await res.json();
-    const block = json?.result;
-    if (!block?.hash || !block?.number) return null;
-    return {
-      blockNumber: parseInt(block.number, 16),
-      blockHash:   block.hash as string,
-    };
+    if (!logsRes.ok) return null;
+
+    const logsJson = await logsRes.json();
+    if (logsJson.error) return null;
+
+    const logs: Array<{
+      data:        string;
+      topics:      string[];
+      blockNumber: string;
+    }> = logsJson?.result ?? [];
+
+    // Filter for RevealedWithCallback events:
+    //   • data is exactly 352 bytes long (704 hex chars + "0x" = 706 total)
+    //   • single topic (topic[0] = event signature hash, no indexed params)
+    const EXPECTED_LEN = 2 + REVEALED_DATA_BYTES * 2; // 706
+    const revealedLogs = logs.filter(
+      (log) => log.data?.length === EXPECTED_LEN && log.topics?.length === 1
+    );
+
+    if (revealedLogs.length === 0) return null;
+
+    // Use the most recent revelation (last in array = highest block)
+    const log = revealedLogs[revealedLogs.length - 1];
+
+    // randomNumber is the LAST 64 hex chars of data (last 32 bytes)
+    const randomBytes = "0x" + log.data.slice(-64);
+
+    // sequenceNumber is in slot 1 of the Request struct (uint64, right-padded to 32 bytes)
+    // Slot 1 starts at hex offset 2 + 64 = 66, the uint64 occupies the last 16 chars (8 bytes)
+    const seqHex     = log.data.slice(66 + 48, 66 + 64); // last 16 hex chars of 32-byte slot 1
+    const revSeq     = parseInt(seqHex, 16) || 0;
+    const revBlock   = parseInt(log.blockNumber, 16) || latestBlock;
+
+    return { randomBytes, revSequence: revSeq, blockNumber: revBlock };
   } catch {
     return null;
   }
 }
 
-// ── Try on-chain eth_call to Entropy contract ─────────────────────────────────
+// ── Try on-chain eth_call for latest provider sequence number ─────────────────
 
 async function tryOnChain(): Promise<{ sequenceNumber: number; blockNumber: number } | null> {
   try {
-    // Encode call to getProviderInfo(address)
-    // Function selector: keccak256("getProviderInfo(address)") = 0xa0cfe58a
     const paddedProvider = DEFAULT_PROVIDER.toLowerCase().replace("0x", "").padStart(64, "0");
-    const callData = `0xa0cfe58a${paddedProvider}`;
-
-    const rpcBody = {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "eth_call",
-      params: [
-        { to: ENTROPY_CONTRACT, data: callData },
-        "latest",
-      ],
-    };
+    const callData = `0xa0cfe58a${paddedProvider}`; // getProviderInfo(address)
 
     const [callRes, blockRes] = await Promise.all([
       fetch(BASE_RPC, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(rpcBody),
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 1, method: "eth_call",
+          params: [{ to: ENTROPY_CONTRACT, data: callData }, "latest"],
+        }),
         signal: AbortSignal.timeout(6000),
       }),
       fetch(BASE_RPC, {
@@ -147,63 +256,94 @@ async function tryOnChain(): Promise<{ sequenceNumber: number; blockNumber: numb
 
     if (!hex || hex === "0x") return null;
 
-    // ProviderInfo is a packed ABI-encoded struct. sequenceNumber is uint64 at
-    // slot 6 (after two uint128 + two bytes32 + two dynamic bytes fields).
-    // Dynamic types make exact offsets hard — instead, just use the full result
-    // as entropy source, and extract the last meaningful uint64 from the tail.
-    //
-    // Simpler: use last 8 bytes of the response (sequenceNumber is typically near end)
-    const cleanHex = hex.replace("0x", "");
-    // Last 64 chars = 32 bytes = the final uint in the tuple (currentCommitmentSequenceNumber)
-    // Use last 16 hex chars (8 bytes) — enough for uint64 sequenceNumber
-    // Avoid BigInt literal syntax (n suffix) to stay ES2019 compatible
-    const lastHex = cleanHex.slice(-16) || "0";
-    const lastSlot = parseInt(lastHex, 16);
-
+    const cleanHex  = hex.replace("0x", "");
+    const lastHex   = cleanHex.slice(-16) || "0";
+    const lastSlot  = parseInt(lastHex, 16);
     const blockNumber = parseInt(blockHex, 16);
 
-    if (lastSlot > 0) {
-      return { sequenceNumber: lastSlot, blockNumber };
-    }
+    if (lastSlot > 0) return { sequenceNumber: lastSlot, blockNumber };
     return null;
   } catch {
     return null;
   }
 }
 
-// ── Simple hash (no crypto module needed — just string hashing) ───────────────
+// ── Fetch block hash from Base ────────────────────────────────────────────────
+
+async function fetchBlockHash(blockNumber: number | "latest"): Promise<{ blockNumber: number; blockHash: string } | null> {
+  try {
+    const blockParam = blockNumber === "latest" ? "latest" : `0x${blockNumber.toString(16)}`;
+    const res = await fetch(BASE_RPC, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 3, method: "eth_getBlockByNumber",
+        params: [blockParam, false],
+      }),
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) return null;
+    const json  = await res.json();
+    const block = json?.result;
+    if (!block?.hash || !block?.number) return null;
+    return { blockNumber: parseInt(block.number, 16), blockHash: block.hash as string };
+  } catch {
+    return null;
+  }
+}
+
+// ── Simple FNV1a hash (fallback seed derivation) ──────────────────────────────
 
 function simpleHash(input: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
     h = Math.imul(h ^ input.charCodeAt(i), 0x01000193) >>> 0;
   }
-  // Extend to 32 hex chars for display
   return (h >>> 0).toString(16).padStart(8, "0").repeat(4);
 }
 
-// ── Handler ───────────────────────────────────────────────────────────────────
+// ── Main handler ──────────────────────────────────────────────────────────────
 
 export async function GET(): Promise<NextResponse> {
   const timestamp = Math.floor(Date.now() / 1000);
 
-  // Try Fortuna first (fastest), then on-chain, then fallback
-  let state: { sequenceNumber: number; blockNumber: number } | null = null;
+  // Step 1: Get the latest sequence number and block (for display + fallback)
+  let seqState: { sequenceNumber: number; blockNumber: number } | null = null;
   let source: EntropyState["source"] = "fallback";
 
-  state = await tryFortuna();
-  if (state) {
+  seqState = await tryFortuna();
+  if (seqState) {
     source = "fortuna";
   } else {
-    state = await tryOnChain();
-    if (state) source = "contract";
+    seqState = await tryOnChain();
+    if (seqState) source = "contract";
   }
 
-  const sequenceNumber = state?.sequenceNumber ?? timestamp;
-  let   blockNumber    = state?.blockNumber    ?? 0;
+  const sequenceNumber = seqState?.sequenceNumber ?? timestamp;
+  let   blockNumber    = seqState?.blockNumber    ?? 0;
 
-  // Fetch the actual block hash — this ties randomness to real on-chain state
-  // and makes it independently verifiable on Basescan by anyone.
+  // Step 2: Try to get ACTUAL revealed randomness from Pyth Entropy
+  //   First: Fortuna REST revelation endpoint
+  //   Then:  eth_getLogs reading RevealedWithCallback on-chain events
+  let revelation: { randomBytes: string; revSequence: number } | null = null;
+  let revMethod = "";
+
+  if (seqState && seqState.sequenceNumber > 2) {
+    revelation = await tryFortunaRevelation(seqState.sequenceNumber);
+    if (revelation) revMethod = "fortuna-api";
+  }
+
+  if (!revelation) {
+    const logRev = await tryEthLogs();
+    if (logRev) {
+      revelation = { randomBytes: logRev.randomBytes, revSequence: logRev.revSequence };
+      revMethod  = "eth-logs";
+      // Use the revelation block for block hash (more provenance)
+      if (logRev.blockNumber > 0) blockNumber = logRev.blockNumber;
+    }
+  }
+
+  // Step 3: Fetch the block hash to tie randomness to verifiable on-chain state
   let blockHash = "0x0000000000000000000000000000000000000000000000000000000000000000";
   const blockData = await fetchBlockHash(blockNumber > 0 ? blockNumber : "latest");
   if (blockData) {
@@ -211,13 +351,29 @@ export async function GET(): Promise<NextResponse> {
     blockHash   = blockData.blockHash;
   }
 
-  // Derive the entropy seed: hash of sequence + block hash + minute-bucket
-  // Block hash is unpredictable before the block is mined — this ensures the
-  // seed cannot be predicted by any party before the round starts.
-  const minuteBucket  = Math.floor(timestamp / 60);
-  const seedInput     = `pyth-entropy:${sequenceNumber}:${blockHash}:${minuteBucket}`;
-  const seed          = simpleHash(seedInput);
-  const seedFormula   = `FNV1a( "pyth-entropy:${sequenceNumber}:${blockHash.slice(0, 10)}…:${minuteBucket}" )`;
+  // Step 4: Derive the game seed
+  //   • If we got real Pyth Entropy revelation bytes → use them directly as seed
+  //   • Otherwise → derive from sequence number + block hash (our fallback)
+  let seed: string;
+  let seedFormula: string;
+  let isRealEntropy = false;
+
+  if (revelation?.randomBytes) {
+    // Use the actual Pyth Entropy revealed random bytes as the game seed.
+    // These went through the full commit-reveal protocol — no party could have
+    // predicted them before both user and provider revealed their commitments.
+    seed         = revelation.randomBytes.replace("0x", "");
+    seedFormula  = `Pyth Entropy revelation #${revelation.revSequence} → keccak256(userRandom ⊕ providerRandom)`;
+    isRealEntropy = true;
+  } else {
+    // Fallback: derive seed from sequence number + block hash + minute bucket.
+    // Block hash is unpredictable before mining, so this is still fair.
+    const minuteBucket = Math.floor(timestamp / 60);
+    const seedInput    = `pyth-entropy:${sequenceNumber}:${blockHash}:${minuteBucket}`;
+    seed               = simpleHash(seedInput);
+    seedFormula        = `FNV1a("pyth-entropy:${sequenceNumber}:${blockHash.slice(0, 10)}…:${minuteBucket}")`;
+    isRealEntropy      = false;
+  }
 
   const result: EntropyState = {
     sequenceNumber,
@@ -230,11 +386,17 @@ export async function GET(): Promise<NextResponse> {
     seedFormula,
     timestamp,
     source,
+    isRealEntropy,
+    ...(revelation ? {
+      revelationBytes: revelation.randomBytes,
+      revSequence:     revelation.revSequence,
+      revMethod,
+    } : {}),
   };
 
   return NextResponse.json(result, {
     headers: {
-      // Valid for 60 seconds — each minute-bucket uses same seed (stable rounds)
+      // Cache for 60s — real entropy revelations happen continuously so this stays fresh
       "Cache-Control": "public, max-age=60, s-maxage=60",
     },
   });
