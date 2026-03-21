@@ -198,19 +198,36 @@ export function computeCalibration(
   const SIGMA_MULTIPLES = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
   const EXPECTED        = [0.383, 0.683, 0.866, 0.954, 0.988, 0.997];
 
+  if (snapshots.length < 2) {
+    return SIGMA_MULTIPLES.map((k, idx) => ({ k, expected: EXPECTED[idx], observed: 0, sampleSize: 0 }));
+  }
+
+  // Infer the actual sampling interval from the data.
+  // The user-selected horizon (30s / 60s / 300s) is much shorter than the
+  // snapshot interval (~7200s), so we cannot find exact-horizon matches.
+  // Instead, use consecutive pairs (i, i+1) as the measurement window —
+  // this correctly measures "does the CI at time T bound the price change
+  // over the actual sampling interval?", which is what calibration means.
+  const actualIntervalSecs =
+    (snapshots[snapshots.length - 1].timestamp - snapshots[0].timestamp) /
+    (snapshots.length - 1);
+
+  // Scale CI by the ratio of actual interval to selected horizon.
+  // A 1-min horizon CI should be narrower than a 120-min CI by sqrt(120).
+  // This lets the user-selected horizon still influence the width expectation.
+  const scale = Math.sqrt(actualIntervalSecs / Math.max(horizonSeconds, 1));
+
   return SIGMA_MULTIPLES.map((k, idx) => {
     let captured = 0;
-    let total = 0;
+    let total    = 0;
 
     for (let i = 0; i < snapshots.length - 1; i++) {
-      const snap = snapshots[i];
-      // Find snapshot closest to snap.timestamp + horizonSeconds
-      const targetTime = snap.timestamp + horizonSeconds;
-      const future = findNearestSnapshot(snapshots, targetTime, i + 1);
-      if (!future || Math.abs(future.timestamp - targetTime) > horizonSeconds * 0.5) continue;
+      const snap   = snapshots[i];
+      const future = snapshots[i + 1]; // always use the next consecutive snapshot
 
       const actualMove = Math.abs(future.price - snap.price);
-      const bound = k * snap.conf;
+      // Scale the CI bound by the horizon ratio so shorter horizons = tighter test
+      const bound = k * snap.conf * scale;
 
       if (actualMove <= bound) captured++;
       total++;
@@ -218,8 +235,8 @@ export function computeCalibration(
 
     return {
       k,
-      expected: EXPECTED[idx],
-      observed: total > 0 ? captured / total : 0,
+      expected:   EXPECTED[idx],
+      observed:   total > 0 ? captured / total : 0,
       sampleSize: total,
     };
   });

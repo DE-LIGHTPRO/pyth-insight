@@ -66,10 +66,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const now  = Math.floor(Date.now() / 1000) - TWO_HOURS;
   const from = now - days * 86400;
 
-  // 120-min intervals → 36 snapshots over 3 days (vs 72 at 60min).
-  // Fewer requests = less rate-limit pressure; still ≥ 30 data points, plenty
-  // for statistically meaningful calibration curves.
-  const intervalMinutes = 120;
+  // 60-min intervals → 72 snapshots over 3 days.
+  // Better statistical resolution than 120-min. Hermes handles the load fine
+  // with our 5-req batches and 1.5s delays (fits inside 60s Vercel timeout).
+  const intervalMinutes = 60;
 
   try {
     const snapshots = await getPriceSnapshots(priceId, from, now, intervalMinutes);
