@@ -73,48 +73,50 @@ export interface EntropyState {
   revSequence?:    number;   // sequence number of the revelation used
   revMethod?:      string;   // how the revelation was fetched
   // Debug info — always included so we can diagnose failures without server logs
-  _debug?: {
-    fortunaChainId?:    string;
-    fortunaSeqNum?:     number;
-    fortunaRevUrls?:    Array<{ url: string; status: number | string }>;
-    ethLogsRpc?:        string;
-    ethLogsRange?:      number;
-    ethLogsTotal?:      number;
-    ethLogsDataLens?:   number[];
-    ethLogsTopicCounts?: number[];
-    ethLogsError?:      string;
-    failReason?:        string;
-  };
+  _debug?: Record<string, unknown>;
 }
 
 // ── Try Fortuna REST API for sequence number / block info ────────────────────
 
-async function tryFortuna(): Promise<{ sequenceNumber: number; blockNumber: number; chainId: string } | null> {
+async function tryFortuna(): Promise<{
+  sequenceNumber: number; blockNumber: number; chainId: string;
+  debug: Record<string, unknown>;
+} | null> {
+  const debug: Record<string, unknown> = {};
   try {
     const res = await fetch(`${FORTUNA_BASE}/v1/chains`, {
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(5000),
     });
-    if (!res.ok) return null;
+    debug.fortunaStatus = res.status;
+    if (!res.ok) { debug.fortunaErr = "non-ok"; return null; }
 
+    const raw = await res.json();
+    // API may return array OR object with a "chains" key
     const chains: Array<{
       id: string;
       latest_block_number?: number;
       sequence_number?: number;
       latest_sequence_number?: number;
-    }> = await res.json();
+    }> = Array.isArray(raw) ? raw : (raw.chains ?? raw.data ?? []);
+    debug.fortunaChainCount = chains.length;
+    debug.fortunaChainIds   = chains.slice(0, 10).map((c) => c.id);
 
     const baseChain = chains.find(
       (c) => c.id === BASE_CHAIN_ID || c.id === "base" || c.id?.toLowerCase().includes("base")
     );
-    if (!baseChain) return null;
+    if (!baseChain) { debug.fortunaErr = "no-base-chain"; return null; }
 
+    debug.fortunaChainId = baseChain.id;
     const sequenceNumber = baseChain.latest_sequence_number ?? baseChain.sequence_number ?? 0;
     const blockNumber    = baseChain.latest_block_number ?? 0;
+    debug.fortunaSeqNum  = sequenceNumber;
 
-    if (sequenceNumber > 0) return { sequenceNumber, blockNumber, chainId: baseChain.id };
+    if (sequenceNumber > 0) return { sequenceNumber, blockNumber, chainId: baseChain.id, debug };
+    debug.fortunaErr = "seq-zero";
     return null;
-  } catch {
+  } catch (e) {
+    debug.fortunaErr = String(e).slice(0, 80);
     return null;
   }
 }
@@ -192,98 +194,87 @@ async function tryFortunaRevelation(latestSeq: number, chainId: string): Promise
 const REVEALED_DATA_BYTES = 352;   // Request(256) + userRandom(32) + providerRandom(32) + randomNumber(32)
 
 async function tryEthLogs(): Promise<{
-  randomBytes: string;
-  revSequence: number;
-  blockNumber:  number;
-  debug: { rpc: string; range: number; total: number; dataLens: number[]; topicCounts: number[]; error?: string };
-} | null> {
+  result: { randomBytes: string; revSequence: number; blockNumber: number } | null;
+  debug: Record<string, unknown>;
+}> {
+  const debug: Record<string, unknown> = {};
   try {
     // Step 1: Get current block number via first available RPC
     const bnRes = await rpcFetch({ jsonrpc: "2.0", id: 20, method: "eth_blockNumber", params: [] });
-    if (!bnRes) return null;
+    if (!bnRes) { debug.ethErr = "blocknum-rpc-failed"; return { result: null, debug }; }
     const bnJson = await bnRes.json();
     const latestBlock = parseInt(bnJson.result as string, 16);
-    if (!latestBlock) return null;
+    if (!latestBlock) { debug.ethErr = "blocknum-zero"; return { result: null, debug }; }
+    debug.latestBlock = latestBlock;
 
     // Step 2: Try progressively larger block ranges across all RPCs.
-    // Small ranges first to avoid hitting eth_getLogs result limits (~10k logs).
-    // Base produces ~2 blocks/s so 50 blocks ≈ 25s, 300 ≈ 2.5min, 1000 ≈ 8min.
-    const BLOCK_RANGES = [50, 150, 300, 1000, 5000];
+    const BLOCK_RANGES = [50, 300, 1000, 5000];
     const EXPECTED_LEN = 2 + REVEALED_DATA_BYTES * 2; // 706 hex chars
+    const rpcResults: Array<{ rpc: string; range: number; total: number; rpcError?: string; dataLens: number[] }> = [];
 
     for (const rpc of BASE_RPCS) {
       for (const range of BLOCK_RANGES) {
         const fromBlock = `0x${Math.max(0, latestBlock - range).toString(16)}`;
-
-        let logsJson: { result?: unknown[]; error?: unknown };
+        let logsJson: { result?: unknown[]; error?: { message?: string } };
         try {
           const logsRes = await fetch(rpc, {
             method:  "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              jsonrpc: "2.0",
-              id: 21,
-              method: "eth_getLogs",
+              jsonrpc: "2.0", id: 21, method: "eth_getLogs",
               params: [{ address: ENTROPY_CONTRACT, fromBlock, toBlock: "latest" }],
             }),
             signal: AbortSignal.timeout(8000),
           });
-          if (!logsRes.ok) continue;
+          if (!logsRes.ok) {
+            rpcResults.push({ rpc: rpc.slice(8, 30), range, total: -1, rpcError: `http-${logsRes.status}`, dataLens: [] });
+            continue;
+          }
           logsJson = await logsRes.json();
-        } catch { continue; }
-
-        // If RPC returned an error (e.g. too many results), try a smaller range
-        if (logsJson.error) continue;
-
-        const logs = (logsJson.result ?? []) as Array<{
-          data: string; topics: string[]; blockNumber: string;
-        }>;
-
-        // Collect debug info about what log data lengths we're seeing
-        const dataLens = logs.slice(0, 20).map((l) => l.data?.length ?? 0);
-        const topicCounts = logs.slice(0, 20).map((l) => l.topics?.length ?? 0);
-
-        // RevealedWithCallback / Revealed: data = exactly 352 bytes (706 hex chars incl. "0x")
-        // No indexed params → topics has exactly 1 entry (the event sig hash)
-        // Primary filter: exact 706 chars, single topic
-        let revealedLogs = logs.filter(
-          (log) => log.data?.length === EXPECTED_LEN && log.topics?.length === 1
-        );
-
-        // Fallback filter: accept any log with ≥ 300 bytes of data (likely a reveal event)
-        // This handles minor ABI variations across contract versions
-        if (revealedLogs.length === 0) {
-          revealedLogs = logs.filter(
-            (log) => log.data && log.data.length >= 2 + 300 * 2
-          );
-        }
-
-        if (revealedLogs.length === 0) {
-          // If we got logs but none matched, wider range won't help — try next RPC
-          if (logs.length > 0) break;
+        } catch (e) {
+          rpcResults.push({ rpc: rpc.slice(8, 30), range, total: -1, rpcError: String(e).slice(0, 40), dataLens: [] });
           continue;
         }
 
-        // Use the most recent revelation (last in array = highest block number)
-        const log = revealedLogs[revealedLogs.length - 1];
+        if (logsJson.error) {
+          rpcResults.push({ rpc: rpc.slice(8, 30), range, total: -1, rpcError: String(logsJson.error?.message).slice(0, 40), dataLens: [] });
+          continue;
+        }
 
-        // randomNumber is the LAST 32 bytes (64 hex chars) of event data
+        const logs = (logsJson.result ?? []) as Array<{ data: string; topics: string[]; blockNumber: string }>;
+        const dataLens = logs.slice(0, 30).map((l) => l.data?.length ?? 0);
+        rpcResults.push({ rpc: rpc.slice(8, 30), range, total: logs.length, dataLens });
+
+        // Primary filter: exact 706 chars (352 bytes), single topic
+        let revealedLogs = logs.filter(
+          (log) => log.data?.length === EXPECTED_LEN && log.topics?.length === 1
+        );
+        // Fallback: any log with ≥ 300 bytes of data
+        if (revealedLogs.length === 0) {
+          revealedLogs = logs.filter((log) => log.data && log.data.length >= 602);
+        }
+
+        if (revealedLogs.length === 0) {
+          if (logs.length > 0) break; // logs exist but none match — wider range won't help
+          continue;
+        }
+
+        const log = revealedLogs[revealedLogs.length - 1];
         const randomBytes = "0x" + log.data.slice(-64);
         if (randomBytes.length !== 66) continue;
 
-        // sequenceNumber sits in slot 1 of the Request struct (uint64, ABI right-aligned)
-        // Slot 1 offset: 2 ("0x") + 64 (slot 0) = 66; uint64 is last 16 chars of its 32-byte slot
         const seqHex  = log.data.slice(66 + 48, 66 + 64);
         const revSeq  = parseInt(seqHex, 16) || 0;
         const revBlock = parseInt(log.blockNumber, 16) || latestBlock;
-
-        return { randomBytes, revSequence: revSeq, blockNumber: revBlock,
-          debug: { rpc, range, total: logs.length, dataLens, topicCounts } };
+        debug.ethRpcResults = rpcResults;
+        return { result: { randomBytes, revSequence: revSeq, blockNumber: revBlock }, debug };
       }
     }
-    return null;
+    debug.ethRpcResults = rpcResults;
+    return { result: null, debug };
   } catch (e) {
-    return null;
+    debug.ethErr = String(e).slice(0, 80);
+    return { result: null, debug };
   }
 }
 
@@ -360,15 +351,21 @@ export async function GET(): Promise<NextResponse> {
   // Step 1: Get the latest sequence number and block (for display + fallback)
   let seqState: { sequenceNumber: number; blockNumber: number; chainId: string } | null = null;
   let source: EntropyState["source"] = "fallback";
+  const dbg: Record<string, unknown> = {};
 
-  seqState = await tryFortuna();
-  if (seqState) {
+  const fortunaResult = await tryFortuna();
+  Object.assign(dbg, fortunaResult?.debug ?? {});
+  if (fortunaResult) {
+    seqState = fortunaResult;
     source = "fortuna";
   } else {
     const onChain = await tryOnChain();
     if (onChain) {
       seqState = { ...onChain, chainId: BASE_CHAIN_ID };
       source = "contract";
+      dbg.onChainSeq = onChain.sequenceNumber;
+    } else {
+      dbg.onChainErr = "failed";
     }
   }
 
@@ -376,39 +373,25 @@ export async function GET(): Promise<NextResponse> {
   let   blockNumber    = seqState?.blockNumber    ?? 0;
 
   // Step 2: Try to get ACTUAL revealed randomness from Pyth Entropy
-  //   First: Fortuna REST revelation endpoint
-  //   Then:  eth_getLogs reading RevealedWithCallback on-chain events
   let revelation: { randomBytes: string; revSequence: number } | null = null;
   let revMethod = "";
 
-  // Debug collectors
-  let dbgFortunaRevUrls: Array<{ url: string; status: number | string }> | undefined;
-  let dbgEthLogs: { rpc: string; range: number; total: number; dataLens: number[]; topicCounts: number[]; error?: string } | undefined;
-  let dbgFailReason = "";
-
   if (seqState && seqState.sequenceNumber > 2) {
     const fortunaRev = await tryFortunaRevelation(seqState.sequenceNumber, seqState.chainId);
-    dbgFortunaRevUrls = fortunaRev?.urlStatuses ?? [];
+    dbg.fortunaRevUrls = fortunaRev?.urlStatuses ?? [];
     if (fortunaRev) {
       revelation = { randomBytes: fortunaRev.randomBytes, revSequence: fortunaRev.revSequence };
       revMethod  = "fortuna-api";
-    } else {
-      dbgFailReason = "fortuna-rev-failed";
     }
-  } else {
-    dbgFailReason = "no-seq-state";
   }
 
   if (!revelation) {
-    const logRev = await tryEthLogs();
+    const { result: logRev, debug: ethDebug } = await tryEthLogs();
+    Object.assign(dbg, ethDebug);
     if (logRev) {
-      dbgEthLogs = logRev.debug;
       revelation = { randomBytes: logRev.randomBytes, revSequence: logRev.revSequence };
       revMethod  = "eth-logs";
-      // Use the revelation block for block hash (more provenance)
       if (logRev.blockNumber > 0) blockNumber = logRev.blockNumber;
-    } else {
-      dbgFailReason += ",eth-logs-failed";
     }
   }
 
@@ -461,17 +444,7 @@ export async function GET(): Promise<NextResponse> {
       revSequence:     revelation.revSequence,
       revMethod,
     } : {}),
-    _debug: {
-      fortunaChainId:    seqState?.chainId,
-      fortunaSeqNum:     seqState?.sequenceNumber,
-      fortunaRevUrls:    dbgFortunaRevUrls,
-      ethLogsRpc:        dbgEthLogs?.rpc,
-      ethLogsRange:      dbgEthLogs?.range,
-      ethLogsTotal:      dbgEthLogs?.total,
-      ethLogsDataLens:   dbgEthLogs?.dataLens,
-      ethLogsTopicCounts: dbgEthLogs?.topicCounts,
-      failReason:        dbgFailReason || undefined,
-    },
+    _debug: dbg,
   };
 
   return NextResponse.json(result, {
