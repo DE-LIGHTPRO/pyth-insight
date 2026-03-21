@@ -12,13 +12,15 @@
 
 Pyth Insight turns raw oracle data into actionable intelligence. It is not a price ticker — it is an analytical layer on top of Pyth's real-time price feeds that surfaces what the data is actually saying about market conditions, confidence, and statistical reliability.
 
-**Live Price Feeds** — Every feed available on Pyth Hermes dynamically discovered and displayed — crypto, forex, metals, and more. Prices polled in batches at 1-second intervals. Each card shows the live price, confidence interval (CI), CI width, EMA deviation, and a real-time quality classification (tight / normal / wide / extreme).
+**Live Price Feeds** — Every feed available on Pyth Hermes dynamically discovered and displayed — crypto, forex, metals, and more. Prices polled in batches every 3 seconds. Each card shows the live price, confidence interval (CI), CI width, EMA deviation, and a real-time quality classification (tight / normal / wide / extreme).
 
-**CI Calibration Analysis** *(flagship)* — Tests whether Pyth's published confidence intervals are statistically accurate. A correctly calibrated ±1σ CI should contain the true price 68.3% of the time; ±2σ should contain it 95.4%. This page runs that test against historical data from the Pyth Benchmarks API and shows whether the oracle is over- or under-confident — information that is directly useful for DeFi protocols relying on Pyth for risk calculations.
+**CI Calibration Analysis** *(flagship)* — Tests whether Pyth's published confidence intervals are statistically accurate. A correctly calibrated ±1σ CI should contain the true price 68.3% of the time; ±2σ should contain it 95.4%. This page fetches historical price snapshots from Hermes, tests that hypothesis across major assets, and renders an empirical-vs-theoretical calibration chart. Assets that are over- or under-confident are flagged — information directly useful for DeFi protocols relying on Pyth for risk calculations.
 
-**Volatility Dashboard** — Intraday volatility surface across all tracked assets, derived from live CI data.
+**Volatility Dashboard** — Realized volatility rankings across tracked assets, computed from historical hourly prices. Shows 24h vs 7d RV with trend direction and vol regime classification (low / medium / high / extreme).
 
-**AI Oracle Analyst** — Conversational interface powered by Claude that answers questions about current Pyth feed conditions, CI calibration status, and oracle health in plain language.
+**Oracle Challenge (Game)** — An Entropy-powered prediction game. Each 30-second round, the Pyth Entropy sequence number on Base (Fortuna provider) is combined with the actual block hash and a minute-bucket to derive a deterministic seed — selecting one of 12 live Pyth feeds. Players bet whether the next price will land inside or outside Pyth's real-time CI. The seed formula and Basescan block hash link are shown so anyone can verify the result was not manipulated.
+
+**AI Oracle Analyst** — Streaming chat interface powered by Gemini (with Claude fallback) injected with a live snapshot of all connected Pyth feeds, so it can answer questions about what is happening on-chain right now.
 
 ---
 
@@ -27,10 +29,10 @@ Pyth Insight turns raw oracle data into actionable intelligence. It is not a pri
 | Feature | Pyth API Used |
 |---|---|
 | Full feed catalogue (dynamic) | Hermes REST (`/v2/price_feeds`) |
-| Live price polling (1s batches) | Hermes REST (`/v2/updates/price/latest`) |
-| Historical calibration data | Pyth Benchmarks API (`benchmarks.pyth.network`) |
+| Live price polling (3s batches) | Hermes REST (`/v2/updates/price/latest`) |
+| Historical calibration snapshots | Hermes REST (`/v2/updates/price/{timestamp}`) |
+| Entropy seed / randomness | Pyth Fortuna on Base + `eth_getBlockByNumber` RPC |
 | Feed metadata & SDK | `@pythnetwork/hermes-client` |
-| AI data layer (March 2+) | Pyth MCP Server (with direct-API fallback) |
 
 All feed IDs are sourced dynamically from Hermes at runtime — no hardcoded ID lists.
 
@@ -43,7 +45,7 @@ All feed IDs are sourced dynamically from Hermes at runtime — no hardcoded ID 
 - **Styling** — Tailwind CSS
 - **State** — Zustand v5
 - **Charts** — Recharts, D3.js
-- **AI** — Anthropic Claude SDK (`@anthropic-ai/sdk`)
+- **AI** — Google Gemini (dynamic model discovery) with Anthropic Claude fallback
 - **Oracle SDK** — `@pythnetwork/hermes-client`
 
 ---
@@ -57,11 +59,12 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-No API keys required for price feeds — Pyth Hermes is public. For the AI Analyst, add your Anthropic key:
+No API keys required for price feeds — Pyth Hermes is public. For the AI Analyst, add a Gemini or Anthropic key:
 
 ```bash
 # .env.local
-ANTHROPIC_API_KEY=sk-ant-...
+GEMINI_API_KEY=AIza...        # Google AI Studio — free tier works
+ANTHROPIC_API_KEY=sk-ant-...  # optional — used if set, Gemini otherwise
 ```
 
 ---
@@ -70,20 +73,20 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 ```
 app/
-  dashboard/feeds/          Live price feeds
+  dashboard/feeds/          Live price feeds (1,400+ Pyth feeds)
   dashboard/calibration/    CI Calibration Analysis (flagship)
-  dashboard/volatility/     Volatility dashboard
+  dashboard/volatility/     Realized volatility dashboard
+  game/                     Oracle Challenge — Entropy-powered prediction game
   ai/                       AI Oracle Analyst
-  learn/                    Educational content
+  learn/                    Educational content (4 pages)
 components/
   PriceFeedCard             Price card with CI bar and flash animations
   PriceFeedGrid             Sortable, filterable feed grid
-  PythLogo                  Official Pyth Network SVG mark
 lib/
   pyth/hermes.ts            Hermes REST integration + types
-  pyth/benchmarks.ts        Benchmarks API (historical data)
+  pyth/benchmarks.ts        Historical price fetching (Hermes snapshots)
   pyth/price-ids.ts         Official Pyth feed ID registry
-  stores/priceStore.ts      Zustand live price state
+  stores/priceStore.ts      Zustand live price state + batch polling
 ```
 
 ---
