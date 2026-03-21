@@ -147,7 +147,8 @@ export default function GamePage() {
     const ent = await fetchEnt();
     const ae  = ent ?? prev ?? { sequenceNumber: Date.now(), providerAddress: "fallback",
       contractAddress: "0x98046Bd286715D3B0BC227Dd7a956b83D8978603", chainId: "base",
-      blockNumber: 0, seed: Date.now().toString(16), timestamp: Math.floor(Date.now() / 1000), source: "fallback" as const };
+      blockNumber: 0, blockHash: "0x0000000000000000000000000000000000000000000000000000000000000000",
+      seed: Date.now().toString(16), seedFormula: "fallback", timestamp: Math.floor(Date.now() / 1000), source: "fallback" as const };
     setEntropy(ae);
     const chosen = FEED_POOL[seedToIndex(ae.seed, FEED_POOL.length, round) % FEED_POOL.length];
     setFeed(chosen);

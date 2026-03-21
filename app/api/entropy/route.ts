@@ -155,12 +155,15 @@ async function tryOnChain(): Promise<{ sequenceNumber: number; blockNumber: numb
     // Simpler: use last 8 bytes of the response (sequenceNumber is typically near end)
     const cleanHex = hex.replace("0x", "");
     // Last 64 chars = 32 bytes = the final uint in the tuple (currentCommitmentSequenceNumber)
-    const lastSlot = BigInt("0x" + (cleanHex.slice(-64) || "0"));
+    // Use last 16 hex chars (8 bytes) — enough for uint64 sequenceNumber
+    // Avoid BigInt literal syntax (n suffix) to stay ES2019 compatible
+    const lastHex = cleanHex.slice(-16) || "0";
+    const lastSlot = parseInt(lastHex, 16);
 
     const blockNumber = parseInt(blockHex, 16);
 
-    if (lastSlot > 0n) {
-      return { sequenceNumber: Number(lastSlot), blockNumber };
+    if (lastSlot > 0) {
+      return { sequenceNumber: lastSlot, blockNumber };
     }
     return null;
   } catch {
