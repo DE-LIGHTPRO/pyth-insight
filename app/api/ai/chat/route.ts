@@ -66,25 +66,43 @@ async function* streamGemini(
     { role: "user", parts: [{ text: lastUserMsg }] },
   ];
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-    {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents,
-        generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
-      }),
-    }
-  );
+  // Try gemini-2.0-flash; fall back to gemini-1.5-flash if unavailable
+  const MODELS = ["gemini-2.0-flash", "gemini-1.5-flash"];
+  let res: Response | null = null;
+  let lastErr = "";
 
-  if (!res.ok) {
-    const err = await res.text().catch(() => `status ${res.status}`);
-    throw new Error(`Gemini error: ${err.slice(0, 200)}`);
+  for (const model of MODELS) {
+    const r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents,
+          generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
+        }),
+      }
+    );
+    if (r.ok) { res = r; break; }
+    lastErr = `${model} HTTP ${r.status}`;
   }
 
+  if (!res) throw new Error(`Gemini error: ${lastErr}`);
+
   const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+
+  // Surface Gemini-level errors (e.g. safety blocks, quota, auth)
+  if (data?.error) {
+    throw new Error(`Gemini: ${data.error.message ?? JSON.stringify(data.error)}`);
+  }
+
+  const candidate = data?.candidates?.[0];
+  if (!candidate) {
+    const reason = data?.promptFeedback?.blockReason ?? "no candidates returned";
+    throw new Error(`Gemini returned no response (${reason}). Check GEMINI_API_KEY validity.`);
+  }
+
+  const text = candidate?.content?.parts?.[0]?.text ?? "";
 
   // Simulate streaming — yield in ~50-char chunks so the UI feels responsive
   const chunkSize = 50;

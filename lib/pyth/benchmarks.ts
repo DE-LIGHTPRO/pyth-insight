@@ -10,6 +10,17 @@
 const BENCHMARKS_URL =
   process.env.NEXT_PUBLIC_BENCHMARKS_URL ?? "https://benchmarks.pyth.network";
 
+// Optional Pyth Pro API key — if set, sent as Authorization header.
+// The free Benchmarks tier works without a key for /v1/updates/price/{ts},
+// but if you're seeing 401/403 errors, add PYTH_PRO_API_KEY to .env.local.
+const PYTH_PRO_API_KEY = process.env.PYTH_PRO_API_KEY ?? "";
+
+function benchmarksHeaders(): HeadersInit {
+  return PYTH_PRO_API_KEY
+    ? { Authorization: `Bearer ${PYTH_PRO_API_KEY}` }
+    : {};
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface PriceSnapshot {
@@ -97,21 +108,29 @@ export async function getPriceSnapshots(
   // Fix: small concurrent batches (5) with a 2s gap = 25 req/10s, well under.
   const BATCH_SIZE    = 5;
   const BATCH_DELAY   = 2000; // ms between batches
+  const headers       = benchmarksHeaders();
+
+  let firstErrorStatus: number | null = null; // track for better diagnostics
 
   for (let i = 0; i < timestamps.length; i += BATCH_SIZE) {
     const batch = timestamps.slice(i, i + BATCH_SIZE);
 
     const results = await Promise.allSettled(
-      batch.map((ts) =>
-        fetch(
+      batch.map(async (ts) => {
+        const r = await fetch(
           `${BENCHMARKS_URL}/v1/updates/price/${ts}?ids[]=${priceId}&parsed=true`,
-          { cache: "no-store" }
-        ).then((r) => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
-      )
+          { cache: "no-store", headers }
+        );
+        if (!r.ok) {
+          if (!firstErrorStatus) firstErrorStatus = r.status;
+          return null; // track but don't throw — let allSettled handle remaining
+        }
+        return r.json();
+      })
     );
 
     for (const result of results) {
-      if (result.status === "fulfilled") {
+      if (result.status === "fulfilled" && result.value) {
         const parsed = result.value?.parsed?.[0];
         if (parsed) {
           const expo  = parsed.price.expo;
@@ -130,6 +149,15 @@ export async function getPriceSnapshots(
     if (i + BATCH_SIZE < timestamps.length) {
       await new Promise((r) => setTimeout(r, BATCH_DELAY));
     }
+  }
+
+  // Surface a helpful error if we got no data due to auth failures
+  if (snapshots.length === 0 && firstErrorStatus) {
+    const hint =
+      firstErrorStatus === 401 || firstErrorStatus === 403
+        ? `Benchmarks API returned ${firstErrorStatus}. Add PYTH_PRO_API_KEY to .env.local (free registration at https://pyth.network/developers/benchmark-access).`
+        : `Benchmarks API returned HTTP ${firstErrorStatus} for all requests.`;
+    throw new Error(hint);
   }
 
   return snapshots.sort((a, b) => a.timestamp - b.timestamp);

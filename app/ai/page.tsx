@@ -160,11 +160,11 @@ export default function AIPage() {
             if (!line.startsWith("data: ")) continue;
             const payload = line.slice(6).trim();
             if (payload === "[DONE]") break;
-            try {
-              const parsed = JSON.parse(payload);
-              if (parsed.text)  { fullText += parsed.text; setStreamText(fullText); }
-              if (parsed.error) throw new Error(parsed.error);
-            } catch { /* ignore partial JSON */ }
+            // Parse JSON chunk — must NOT swallow real error payloads
+            let parsed: { text?: string; error?: string } | null = null;
+            try { parsed = JSON.parse(payload); } catch { /* ignore partial JSON frames */ }
+            if (parsed?.text)  { fullText += parsed.text; setStreamText(fullText); }
+            if (parsed?.error) throw new Error(parsed.error); // propagate to outer catch
           }
         }
 
@@ -176,7 +176,7 @@ export default function AIPage() {
         const msg = err instanceof Error ? err.message : "Unknown error";
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: `⚠ ${msg}\n\nEnsure ANTHROPIC_API_KEY is set in Vercel environment variables.` },
+          { role: "assistant", content: `⚠ ${msg}` },
         ]);
       } finally {
         setStreaming(false);

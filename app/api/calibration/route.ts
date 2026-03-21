@@ -73,7 +73,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
     if (snapshots.length < 10) {
       return NextResponse.json(
-        { error: "Insufficient data from Benchmarks API. Try a different symbol or period." },
+        { error: `Only ${snapshots.length} snapshots returned. The Benchmarks API may require a free API key — check server logs for HTTP status, or add PYTH_PRO_API_KEY to .env.local.` },
         { status: 503 }
       );
     }
