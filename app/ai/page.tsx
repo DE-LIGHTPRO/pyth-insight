@@ -108,9 +108,15 @@ export default function AIPage() {
   const bottomRef  = useRef<HTMLDivElement>(null);
   const inputRef   = useRef<HTMLTextAreaElement>(null);
 
-  const prices = usePriceStore((s) => s.prices);
-  const status = usePriceStore((s) => s.status);
-  const total  = Object.keys(prices).length;
+  const prices     = usePriceStore((s) => s.prices);
+  const status     = usePriceStore((s) => s.status);
+  const initStream = usePriceStore((s) => s.initStream);
+  const total      = Object.keys(prices).length;
+
+  // Start live feed stream when the AI page mounts (so liveContext is populated)
+  useEffect(() => {
+    if (status === "idle") initStream();
+  }, [status, initStream]);
 
   // Scroll to bottom whenever content changes
   useEffect(() => {
