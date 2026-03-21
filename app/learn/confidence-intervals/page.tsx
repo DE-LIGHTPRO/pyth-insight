@@ -101,7 +101,7 @@ export default function CIPage() {
         <section>
           <h2 className="text-lg font-semibold text-white mb-3">How to use CI in your protocol</h2>
           <div className="rounded-xl border border-white/8 bg-[rgb(17,17,25)] p-4">
-            <p className="text-slate-400 text-xs font-mono mb-3 text-slate-300">// Solidity — safe price check with CI guard</p>
+            <p className="text-slate-400 text-xs font-mono mb-3 text-slate-300">{`// Solidity — safe price check with CI guard`}</p>
             <pre className="text-xs text-slate-400 leading-relaxed overflow-x-auto whitespace-pre">{`PythStructs.Price memory p = pyth.getPriceNoOlderThan(
     BTC_USD_FEED, 60 // max 60 seconds stale
 );
