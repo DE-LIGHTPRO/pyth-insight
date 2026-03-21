@@ -79,9 +79,9 @@ export interface EntropyState {
 // ── Try Fortuna REST API for sequence number / block info ────────────────────
 
 async function tryFortuna(): Promise<{
-  sequenceNumber: number; blockNumber: number; chainId: string;
+  result: { sequenceNumber: number; blockNumber: number; chainId: string } | null;
   debug: Record<string, unknown>;
-} | null> {
+}> {
   const debug: Record<string, unknown> = {};
   try {
     const res = await fetch(`${FORTUNA_BASE}/v1/chains`, {
@@ -89,7 +89,7 @@ async function tryFortuna(): Promise<{
       signal: AbortSignal.timeout(5000),
     });
     debug.fortunaStatus = res.status;
-    if (!res.ok) { debug.fortunaErr = "non-ok"; return null; }
+    if (!res.ok) { debug.fortunaErr = `http-${res.status}`; return { result: null, debug }; }
 
     const raw = await res.json();
     // API may return array OR object with a "chains" key
@@ -105,19 +105,19 @@ async function tryFortuna(): Promise<{
     const baseChain = chains.find(
       (c) => c.id === BASE_CHAIN_ID || c.id === "base" || c.id?.toLowerCase().includes("base")
     );
-    if (!baseChain) { debug.fortunaErr = "no-base-chain"; return null; }
+    if (!baseChain) { debug.fortunaErr = "no-base-chain"; return { result: null, debug }; }
 
     debug.fortunaChainId = baseChain.id;
     const sequenceNumber = baseChain.latest_sequence_number ?? baseChain.sequence_number ?? 0;
     const blockNumber    = baseChain.latest_block_number ?? 0;
     debug.fortunaSeqNum  = sequenceNumber;
 
-    if (sequenceNumber > 0) return { sequenceNumber, blockNumber, chainId: baseChain.id, debug };
+    if (sequenceNumber > 0) return { result: { sequenceNumber, blockNumber, chainId: baseChain.id }, debug };
     debug.fortunaErr = "seq-zero";
-    return null;
+    return { result: null, debug };
   } catch (e) {
     debug.fortunaErr = String(e).slice(0, 80);
-    return null;
+    return { result: null, debug };
   }
 }
 
@@ -173,6 +173,70 @@ async function tryFortunaRevelation(latestSeq: number, chainId: string): Promise
   return null;
 }
 
+// ── Try BaseScan API for recent entropy events ────────────────────────────────
+//
+// BaseScan has a proper event index so it can find events across large block
+// ranges quickly and reliably, without RPC eth_getLogs rate limits.
+// The free tier (no API key) allows ~5 req/s which is more than enough.
+
+async function tryBaseScan(): Promise<{
+  result: { randomBytes: string; revSequence: number; blockNumber: number } | null;
+  debug: Record<string, unknown>;
+}> {
+  const debug: Record<string, unknown> = {};
+  try {
+    // Ask for the 5 most recent logs from the Entropy contract, newest first
+    const url =
+      `https://api.basescan.org/api?module=logs&action=getLogs` +
+      `&address=${ENTROPY_CONTRACT}` +
+      `&fromBlock=0&toBlock=latest&page=1&offset=5&sort=desc`;
+
+    const res = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(8000),
+    });
+    debug.bsStatus = res.status;
+    if (!res.ok) { debug.bsErr = `http-${res.status}`; return { result: null, debug }; }
+
+    const json = await res.json();
+    debug.bsApiStatus = json.status;
+    debug.bsMessage   = json.message;
+
+    if (json.status !== "1" || !Array.isArray(json.result) || json.result.length === 0) {
+      debug.bsErr = json.message ?? "no-results";
+      return { result: null, debug };
+    }
+
+    const logs = json.result as Array<{ data: string; topics: string[]; blockNumber: string }>;
+    debug.bsTotal    = logs.length;
+    debug.bsDataLens = logs.map((l) => l.data?.length ?? 0);
+
+    const EXPECTED_LEN = 2 + REVEALED_DATA_BYTES * 2; // 706 hex chars
+
+    // Primary: exact RevealedWithCallback size (352 bytes), no indexed params
+    let match = logs.find((l) => l.data?.length === EXPECTED_LEN && l.topics?.length === 1);
+    // Fallback: any log with ≥ 300 bytes
+    if (!match) match = logs.find((l) => l.data && l.data.length >= 602);
+
+    if (!match) { debug.bsErr = "no-matching-event"; return { result: null, debug }; }
+
+    const randomBytes = "0x" + match.data.slice(-64);
+    if (randomBytes.length !== 66) { debug.bsErr = "bad-data-slice"; return { result: null, debug }; }
+
+    const seqHex   = match.data.slice(66 + 48, 66 + 64);
+    const revSeq   = parseInt(seqHex, 16) || 0;
+    // BaseScan returns blockNumber as hex string
+    const revBlock = parseInt(match.blockNumber, 16) || 0;
+
+    debug.bsRevSeq   = revSeq;
+    debug.bsRevBlock = revBlock;
+    return { result: { randomBytes, revSequence: revSeq, blockNumber: revBlock }, debug };
+  } catch (e) {
+    debug.bsErr = String(e).slice(0, 80);
+    return { result: null, debug };
+  }
+}
+
 // ── Read RevealedWithCallback events via eth_getLogs ─────────────────────────
 //
 // The RevealedWithCallback event is emitted by the Entropy contract whenever
@@ -208,7 +272,9 @@ async function tryEthLogs(): Promise<{
     debug.latestBlock = latestBlock;
 
     // Step 2: Try progressively larger block ranges across all RPCs.
-    const BLOCK_RANGES = [50, 300, 1000, 5000];
+    // Contract usage is low so we need to look back further.
+    // Base = 2 blocks/s → 50000 blocks ≈ 7 hours, 200000 ≈ 28 hours
+    const BLOCK_RANGES = [1000, 10000, 50000, 200000];
     const EXPECTED_LEN = 2 + REVEALED_DATA_BYTES * 2; // 706 hex chars
     const rpcResults: Array<{ rpc: string; range: number; total: number; rpcError?: string; dataLens: number[] }> = [];
 
@@ -353,10 +419,10 @@ export async function GET(): Promise<NextResponse> {
   let source: EntropyState["source"] = "fallback";
   const dbg: Record<string, unknown> = {};
 
-  const fortunaResult = await tryFortuna();
-  Object.assign(dbg, fortunaResult?.debug ?? {});
-  if (fortunaResult) {
-    seqState = fortunaResult;
+  const { result: fortunaSeqResult, debug: fortunaDbg } = await tryFortuna();
+  Object.assign(dbg, fortunaDbg);
+  if (fortunaSeqResult) {
+    seqState = fortunaSeqResult;
     source = "fortuna";
   } else {
     const onChain = await tryOnChain();
@@ -372,7 +438,8 @@ export async function GET(): Promise<NextResponse> {
   const sequenceNumber = seqState?.sequenceNumber ?? timestamp;
   let   blockNumber    = seqState?.blockNumber    ?? 0;
 
-  // Step 2: Try to get ACTUAL revealed randomness from Pyth Entropy
+  // Step 2: Try to get ACTUAL revealed randomness from Pyth Entropy.
+  // Order: Fortuna revelation API → BaseScan event index → eth_getLogs RPC
   let revelation: { randomBytes: string; revSequence: number } | null = null;
   let revMethod = "";
 
@@ -386,6 +453,18 @@ export async function GET(): Promise<NextResponse> {
   }
 
   if (!revelation) {
+    // BaseScan: reliable event index, no key needed for small queries
+    const { result: bsRev, debug: bsDbg } = await tryBaseScan();
+    Object.assign(dbg, bsDbg);
+    if (bsRev) {
+      revelation = { randomBytes: bsRev.randomBytes, revSequence: bsRev.revSequence };
+      revMethod  = "basescan";
+      if (bsRev.blockNumber > 0) blockNumber = bsRev.blockNumber;
+    }
+  }
+
+  if (!revelation) {
+    // eth_getLogs fallback with wide block ranges
     const { result: logRev, debug: ethDebug } = await tryEthLogs();
     Object.assign(dbg, ethDebug);
     if (logRev) {
