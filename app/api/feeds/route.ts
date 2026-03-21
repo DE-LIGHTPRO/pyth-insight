@@ -53,8 +53,8 @@ export async function GET(): Promise<NextResponse> {
           description:   attr.description ?? sym,
         } satisfies FeedMeta;
       })
-      // Only USD-quoted feeds; non-USD pairs add noise without adding value
-      .filter((f) => f.quoteCurrency === "USD" || f.symbol.endsWith("/USD"))
+      // Filter out entries with missing IDs or obviously malformed symbols
+      .filter((f) => f.id && f.symbol && f.symbol.length > 0)
       // Sort: crypto first, then alphabetically within each type
       .sort((a, b) => {
         if (a.assetType !== b.assetType) {
