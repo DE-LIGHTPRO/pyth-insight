@@ -32,8 +32,29 @@ const DEFAULT_PROVIDER  = "0x52DeaA1c84233F7bb8C8A45baeDE41091c616506";
 const FORTUNA_BASE  = "https://fortuna.dourolabs.app";
 const BASE_CHAIN_ID = "evm-base";
 
-// Base RPC (public endpoint — no key needed for eth_call / eth_getLogs reads)
-const BASE_RPC = "https://mainnet.base.org";
+// Public Base RPC endpoints — tried in order; first success wins
+const BASE_RPCS = [
+  "https://mainnet.base.org",
+  "https://base.llamarpc.com",
+  "https://base-rpc.publicnode.com",
+  "https://1rpc.io/base",
+];
+
+// Helper: POST JSON-RPC to each RPC in turn, return first successful response
+async function rpcFetch(body: object): Promise<Response | null> {
+  for (const rpc of BASE_RPCS) {
+    try {
+      const res = await fetch(rpc, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(body),
+        signal:  AbortSignal.timeout(5000),
+      });
+      if (res.ok) return res;
+    } catch { /* try next RPC */ }
+  }
+  return null;
+}
 
 export interface EntropyState {
   sequenceNumber:  number;
@@ -145,7 +166,6 @@ async function tryFortunaRevelation(latestSeq: number): Promise<{
 // distinguish fulfilled (RevealedWithCallback) from unfulfilled events.
 
 const REVEALED_DATA_BYTES = 352;   // Request(256) + userRandom(32) + providerRandom(32) + randomNumber(32)
-const REVEALED_DATA_HEX   = "0x" + "0".repeat(REVEALED_DATA_BYTES * 2); // expected length marker
 
 async function tryEthLogs(): Promise<{
   randomBytes: string;
@@ -153,70 +173,76 @@ async function tryEthLogs(): Promise<{
   blockNumber:  number;
 } | null> {
   try {
-    // Get current block number
-    const blockNumRes = await fetch(BASE_RPC, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 20, method: "eth_blockNumber", params: [] }),
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!blockNumRes.ok) return null;
-    const bnJson = await blockNumRes.json();
+    // Step 1: Get current block number via first available RPC
+    const bnRes = await rpcFetch({ jsonrpc: "2.0", id: 20, method: "eth_blockNumber", params: [] });
+    if (!bnRes) return null;
+    const bnJson = await bnRes.json();
     const latestBlock = parseInt(bnJson.result as string, 16);
     if (!latestBlock) return null;
 
-    // Query last ~500 blocks (~15 mins on Base) — enough to find a recent revelation
-    const fromBlock = `0x${Math.max(0, latestBlock - 500).toString(16)}`;
+    // Step 2: Try progressively larger block ranges across all RPCs.
+    // Small ranges first to avoid hitting eth_getLogs result limits (~10k logs).
+    // Base produces ~2 blocks/s so 50 blocks ≈ 25s, 300 ≈ 2.5min, 1000 ≈ 8min.
+    const BLOCK_RANGES = [50, 150, 300, 1000];
+    const EXPECTED_LEN = 2 + REVEALED_DATA_BYTES * 2; // 706 hex chars
 
-    const logsRes = await fetch(BASE_RPC, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 21,
-        method: "eth_getLogs",
-        params: [{
-          address:   ENTROPY_CONTRACT,
-          fromBlock,
-          toBlock:   "latest",
-        }],
-      }),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!logsRes.ok) return null;
+    for (const rpc of BASE_RPCS) {
+      for (const range of BLOCK_RANGES) {
+        const fromBlock = `0x${Math.max(0, latestBlock - range).toString(16)}`;
 
-    const logsJson = await logsRes.json();
-    if (logsJson.error) return null;
+        let logsJson: { result?: unknown[]; error?: unknown };
+        try {
+          const logsRes = await fetch(rpc, {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: 21,
+              method: "eth_getLogs",
+              params: [{ address: ENTROPY_CONTRACT, fromBlock, toBlock: "latest" }],
+            }),
+            signal: AbortSignal.timeout(8000),
+          });
+          if (!logsRes.ok) continue;
+          logsJson = await logsRes.json();
+        } catch { continue; }
 
-    const logs: Array<{
-      data:        string;
-      topics:      string[];
-      blockNumber: string;
-    }> = logsJson?.result ?? [];
+        // If RPC returned an error (e.g. too many results), try a smaller range
+        if (logsJson.error) continue;
 
-    // Filter for RevealedWithCallback events:
-    //   • data is exactly 352 bytes long (704 hex chars + "0x" = 706 total)
-    //   • single topic (topic[0] = event signature hash, no indexed params)
-    const EXPECTED_LEN = 2 + REVEALED_DATA_BYTES * 2; // 706
-    const revealedLogs = logs.filter(
-      (log) => log.data?.length === EXPECTED_LEN && log.topics?.length === 1
-    );
+        const logs = (logsJson.result ?? []) as Array<{
+          data: string; topics: string[]; blockNumber: string;
+        }>;
 
-    if (revealedLogs.length === 0) return null;
+        // RevealedWithCallback: data = exactly 352 bytes (706 hex chars incl. "0x")
+        // No indexed params → topics has exactly 1 entry (the event sig hash)
+        const revealedLogs = logs.filter(
+          (log) => log.data?.length === EXPECTED_LEN && log.topics?.length === 1
+        );
 
-    // Use the most recent revelation (last in array = highest block)
-    const log = revealedLogs[revealedLogs.length - 1];
+        if (revealedLogs.length === 0) {
+          // If we got logs but none matched, wider range won't help — try next RPC
+          if (logs.length > 0) break;
+          continue;
+        }
 
-    // randomNumber is the LAST 64 hex chars of data (last 32 bytes)
-    const randomBytes = "0x" + log.data.slice(-64);
+        // Use the most recent revelation (last in array = highest block number)
+        const log = revealedLogs[revealedLogs.length - 1];
 
-    // sequenceNumber is in slot 1 of the Request struct (uint64, right-padded to 32 bytes)
-    // Slot 1 starts at hex offset 2 + 64 = 66, the uint64 occupies the last 16 chars (8 bytes)
-    const seqHex     = log.data.slice(66 + 48, 66 + 64); // last 16 hex chars of 32-byte slot 1
-    const revSeq     = parseInt(seqHex, 16) || 0;
-    const revBlock   = parseInt(log.blockNumber, 16) || latestBlock;
+        // randomNumber is the LAST 32 bytes (64 hex chars) of event data
+        const randomBytes = "0x" + log.data.slice(-64);
+        if (randomBytes.length !== 66) continue;
 
-    return { randomBytes, revSequence: revSeq, blockNumber: revBlock };
+        // sequenceNumber sits in slot 1 of the Request struct (uint64, ABI right-aligned)
+        // Slot 1 offset: 2 ("0x") + 64 (slot 0) = 66; uint64 is last 16 chars of its 32-byte slot
+        const seqHex  = log.data.slice(66 + 48, 66 + 64);
+        const revSeq  = parseInt(seqHex, 16) || 0;
+        const revBlock = parseInt(log.blockNumber, 16) || latestBlock;
+
+        return { randomBytes, revSequence: revSeq, blockNumber: revBlock };
+      }
+    }
+    return null;
   } catch {
     return null;
   }
@@ -230,24 +256,14 @@ async function tryOnChain(): Promise<{ sequenceNumber: number; blockNumber: numb
     const callData = `0xa0cfe58a${paddedProvider}`; // getProviderInfo(address)
 
     const [callRes, blockRes] = await Promise.all([
-      fetch(BASE_RPC, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: 1, method: "eth_call",
-          params: [{ to: ENTROPY_CONTRACT, data: callData }, "latest"],
-        }),
-        signal: AbortSignal.timeout(6000),
+      rpcFetch({
+        jsonrpc: "2.0", id: 1, method: "eth_call",
+        params: [{ to: ENTROPY_CONTRACT, data: callData }, "latest"],
       }),
-      fetch(BASE_RPC, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "eth_blockNumber", params: [] }),
-        signal: AbortSignal.timeout(6000),
-      }),
+      rpcFetch({ jsonrpc: "2.0", id: 2, method: "eth_blockNumber", params: [] }),
     ]);
 
-    if (!callRes.ok) return null;
+    if (!callRes || !blockRes) return null;
 
     const callJson  = await callRes.json();
     const blockJson = await blockRes.json();
@@ -273,16 +289,11 @@ async function tryOnChain(): Promise<{ sequenceNumber: number; blockNumber: numb
 async function fetchBlockHash(blockNumber: number | "latest"): Promise<{ blockNumber: number; blockHash: string } | null> {
   try {
     const blockParam = blockNumber === "latest" ? "latest" : `0x${blockNumber.toString(16)}`;
-    const res = await fetch(BASE_RPC, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0", id: 3, method: "eth_getBlockByNumber",
-        params: [blockParam, false],
-      }),
-      signal: AbortSignal.timeout(6000),
+    const res = await rpcFetch({
+      jsonrpc: "2.0", id: 3, method: "eth_getBlockByNumber",
+      params: [blockParam, false],
     });
-    if (!res.ok) return null;
+    if (!res) return null;
     const json  = await res.json();
     const block = json?.result;
     if (!block?.hash || !block?.number) return null;
