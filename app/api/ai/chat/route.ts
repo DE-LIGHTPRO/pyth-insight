@@ -43,6 +43,43 @@ async function* streamAnthropic(
   }
 }
 
+// ── Gemini model discovery ────────────────────────────────────────────────────
+
+// Cache discovered model names for the process lifetime (avoids repeated list calls)
+let _discoveredModels: string[] | null = null;
+
+async function discoverGeminiModels(apiKey: string): Promise<string[]> {
+  if (_discoveredModels) return _discoveredModels;
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+      { signal: AbortSignal.timeout(6000) }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    const models: string[] = (data.models ?? [])
+      .filter((m: { supportedGenerationMethods?: string[]; name?: string }) =>
+        m.supportedGenerationMethods?.includes("generateContent") &&
+        m.name?.includes("gemini")
+      )
+      .map((m: { name: string }) => m.name.replace("models/", ""))
+      // Prefer flash (fast/free) over pro; newer versions first
+      .sort((a: string, b: string) => {
+        const score = (n: string) =>
+          (n.includes("flash") ? 10 : 0) +
+          (n.includes("2.5")   ?  4 : 0) +
+          (n.includes("2.0")   ?  3 : 0) +
+          (n.includes("1.5")   ?  2 : 0) +
+          (n.includes("lite")  ? -1 : 0);
+        return score(b) - score(a);
+      });
+    if (models.length) _discoveredModels = models;
+    return models;
+  } catch {
+    return [];
+  }
+}
+
 // ── Gemini non-streaming (no SDK needed — plain fetch) ────────────────────────
 
 async function* streamGemini(
@@ -50,7 +87,7 @@ async function* streamGemini(
   messages: ChatMessage[]
 ): AsyncGenerator<string> {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("No AI key configured. Add ANTHROPIC_API_KEY or GEMINI_API_KEY to .env.local.");
+  if (!apiKey) throw new Error("No AI key configured. Add GEMINI_API_KEY to .env.local.");
 
   const lastUserMsg = messages.filter((m) => m.role === "user").at(-1)?.content ?? "";
   const history     = messages.slice(0, -1);
@@ -66,22 +103,33 @@ async function* streamGemini(
     { role: "user", parts: [{ text: lastUserMsg }] },
   ];
 
-  // Model name candidates in preference order.
-  // Google renamed / versioned models in 2025-2026; we try all known aliases
-  // so the fallback works regardless of which ones the API key has access to.
-  const MODELS = [
+  // Static fallback list covering known aliases across 2024-2026.
+  // Dynamic discovery (below) is tried first — this catches anything new.
+  const STATIC_MODELS = [
+    { api: "v1beta", name: "gemini-2.5-flash"              },
+    { api: "v1beta", name: "gemini-2.5-pro"                },
     { api: "v1beta", name: "gemini-2.0-flash"              },
-    { api: "v1beta", name: "gemini-2.0-flash-exp"          },
     { api: "v1beta", name: "gemini-2.0-flash-001"          },
+    { api: "v1beta", name: "gemini-2.0-flash-lite"         },
+    { api: "v1beta", name: "gemini-2.0-flash-exp"          },
     { api: "v1beta", name: "gemini-1.5-flash-latest"       },
+    { api: "v1beta", name: "gemini-1.5-flash-8b"           },
     { api: "v1",     name: "gemini-1.5-flash"              },
     { api: "v1",     name: "gemini-1.5-flash-001"          },
     { api: "v1",     name: "gemini-pro"                    },
   ];
+
+  // Discover models dynamically then merge with static list (discovered first)
+  const discovered = await discoverGeminiModels(apiKey);
+  const allModels: Array<{ api: string; name: string }> = [
+    ...discovered.map((name) => ({ api: "v1beta", name })),
+    ...STATIC_MODELS.filter((s) => !discovered.includes(s.name)),
+  ];
+
   let res: Response | null = null;
   let lastErr = "";
 
-  for (const { api, name } of MODELS) {
+  for (const { api, name } of allModels) {
     const r = await fetch(
       `https://generativelanguage.googleapis.com/${api}/models/${name}:generateContent?key=${apiKey}`,
       {
@@ -91,6 +139,7 @@ async function* streamGemini(
           contents,
           generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
         }),
+        signal: AbortSignal.timeout(20000),
       }
     );
     if (r.ok) { res = r; break; }
