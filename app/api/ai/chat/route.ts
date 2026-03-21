@@ -66,14 +66,24 @@ async function* streamGemini(
     { role: "user", parts: [{ text: lastUserMsg }] },
   ];
 
-  // Try gemini-2.0-flash; fall back to gemini-1.5-flash if unavailable
-  const MODELS = ["gemini-2.0-flash", "gemini-1.5-flash"];
+  // Model name candidates in preference order.
+  // Google renamed / versioned models in 2025-2026; we try all known aliases
+  // so the fallback works regardless of which ones the API key has access to.
+  const MODELS = [
+    { api: "v1beta", name: "gemini-2.0-flash"              },
+    { api: "v1beta", name: "gemini-2.0-flash-exp"          },
+    { api: "v1beta", name: "gemini-2.0-flash-001"          },
+    { api: "v1beta", name: "gemini-1.5-flash-latest"       },
+    { api: "v1",     name: "gemini-1.5-flash"              },
+    { api: "v1",     name: "gemini-1.5-flash-001"          },
+    { api: "v1",     name: "gemini-pro"                    },
+  ];
   let res: Response | null = null;
   let lastErr = "";
 
-  for (const model of MODELS) {
+  for (const { api, name } of MODELS) {
     const r = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/${api}/models/${name}:generateContent?key=${apiKey}`,
       {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
@@ -84,7 +94,7 @@ async function* streamGemini(
       }
     );
     if (r.ok) { res = r; break; }
-    lastErr = `${model} HTTP ${r.status}`;
+    lastErr = `${name} HTTP ${r.status}`;
   }
 
   if (!res) throw new Error(`Gemini error: ${lastErr}`);

@@ -60,7 +60,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   // ── Time range ──────────────────────────────────────────────────────────────
-  const now  = Math.floor(Date.now() / 1000);
+  // Cap "to" at 2 hours ago — Benchmarks returns 422 for very recent timestamps
+  // because the historical archive needs time to ingest and validate new data.
+  const TWO_HOURS = 2 * 3600;
+  const now  = Math.floor(Date.now() / 1000) - TWO_HOURS;
   const from = now - days * 86400;
 
   // 120-min intervals → 36 snapshots over 3 days (vs 72 at 60min).
