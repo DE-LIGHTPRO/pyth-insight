@@ -72,11 +72,24 @@ export interface EntropyState {
   revelationBytes?: string;  // 32-byte hex: actual random number revealed on-chain
   revSequence?:    number;   // sequence number of the revelation used
   revMethod?:      string;   // how the revelation was fetched
+  // Debug info — always included so we can diagnose failures without server logs
+  _debug?: {
+    fortunaChainId?:    string;
+    fortunaSeqNum?:     number;
+    fortunaRevUrls?:    Array<{ url: string; status: number | string }>;
+    ethLogsRpc?:        string;
+    ethLogsRange?:      number;
+    ethLogsTotal?:      number;
+    ethLogsDataLens?:   number[];
+    ethLogsTopicCounts?: number[];
+    ethLogsError?:      string;
+    failReason?:        string;
+  };
 }
 
 // ── Try Fortuna REST API for sequence number / block info ────────────────────
 
-async function tryFortuna(): Promise<{ sequenceNumber: number; blockNumber: number } | null> {
+async function tryFortuna(): Promise<{ sequenceNumber: number; blockNumber: number; chainId: string } | null> {
   try {
     const res = await fetch(`${FORTUNA_BASE}/v1/chains`, {
       headers: { Accept: "application/json" },
@@ -99,7 +112,7 @@ async function tryFortuna(): Promise<{ sequenceNumber: number; blockNumber: numb
     const sequenceNumber = baseChain.latest_sequence_number ?? baseChain.sequence_number ?? 0;
     const blockNumber    = baseChain.latest_block_number ?? 0;
 
-    if (sequenceNumber > 0) return { sequenceNumber, blockNumber };
+    if (sequenceNumber > 0) return { sequenceNumber, blockNumber, chainId: baseChain.id };
     return null;
   } catch {
     return null;
@@ -111,38 +124,49 @@ async function tryFortuna(): Promise<{ sequenceNumber: number; blockNumber: numb
 // Tries to get actual revealed random bytes from a recently fulfilled sequence.
 // Pyth Entropy sequences are fulfilled within seconds, so seqNum - 2 is safe.
 
-async function tryFortunaRevelation(latestSeq: number): Promise<{
+async function tryFortunaRevelation(latestSeq: number, chainId: string): Promise<{
   randomBytes: string;
   revSequence: number;
+  urlStatuses: Array<{ url: string; status: number | string }>;
 } | null> {
   const seqToTry = Math.max(1, latestSeq - 2);
+  const urlStatuses: Array<{ url: string; status: number | string }> = [];
 
-  // Try multiple known Fortuna API URL patterns
-  const urls = [
-    `${FORTUNA_BASE}/v1/revelations/${BASE_CHAIN_ID}/${seqToTry}`,
-    `${FORTUNA_BASE}/v1/chains/${BASE_CHAIN_ID}/revelations/${seqToTry}`,
-    `${FORTUNA_BASE}/v1/chains/${BASE_CHAIN_ID}/requests/${seqToTry}`,
-  ];
+  // Try multiple sequence offsets (in case recent ones aren't fulfilled yet)
+  const seqsToTry = [seqToTry, Math.max(1, latestSeq - 5), Math.max(1, latestSeq - 10)];
 
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, {
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(4000),
-      });
-      if (!res.ok) continue;
-      const data = await res.json();
-      const bytes =
-        data.revelation ??
-        data.random_number ??
-        data.randomNumber ??
-        data.value ??
-        data.random ??
-        data.revealed_random;
-      if (typeof bytes === "string" && bytes.startsWith("0x") && bytes.length === 66) {
-        return { randomBytes: bytes, revSequence: seqToTry };
+  // Try multiple known Fortuna API URL patterns with the actual chain ID
+  for (const seq of seqsToTry) {
+    const urls = [
+      `${FORTUNA_BASE}/v1/chains/${chainId}/revelations/${seq}`,
+      `${FORTUNA_BASE}/v1/revelations/${chainId}/${seq}`,
+      `${FORTUNA_BASE}/v1/chains/${BASE_CHAIN_ID}/revelations/${seq}`,
+    ];
+
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, {
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(4000),
+        });
+        urlStatuses.push({ url, status: res.status });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const bytes =
+          data.revelation ??
+          data.random_number ??
+          data.randomNumber ??
+          data.value ??
+          data.random ??
+          data.revealed_random ??
+          data.randomness;
+        if (typeof bytes === "string" && bytes.startsWith("0x") && bytes.length >= 66) {
+          return { randomBytes: bytes.slice(0, 66), revSequence: seq, urlStatuses };
+        }
+      } catch (e) {
+        urlStatuses.push({ url, status: String(e).slice(0, 60) });
       }
-    } catch { /* try next URL */ }
+    }
   }
   return null;
 }
@@ -171,6 +195,7 @@ async function tryEthLogs(): Promise<{
   randomBytes: string;
   revSequence: number;
   blockNumber:  number;
+  debug: { rpc: string; range: number; total: number; dataLens: number[]; topicCounts: number[]; error?: string };
 } | null> {
   try {
     // Step 1: Get current block number via first available RPC
@@ -183,7 +208,7 @@ async function tryEthLogs(): Promise<{
     // Step 2: Try progressively larger block ranges across all RPCs.
     // Small ranges first to avoid hitting eth_getLogs result limits (~10k logs).
     // Base produces ~2 blocks/s so 50 blocks ≈ 25s, 300 ≈ 2.5min, 1000 ≈ 8min.
-    const BLOCK_RANGES = [50, 150, 300, 1000];
+    const BLOCK_RANGES = [50, 150, 300, 1000, 5000];
     const EXPECTED_LEN = 2 + REVEALED_DATA_BYTES * 2; // 706 hex chars
 
     for (const rpc of BASE_RPCS) {
@@ -213,6 +238,10 @@ async function tryEthLogs(): Promise<{
         const logs = (logsJson.result ?? []) as Array<{
           data: string; topics: string[]; blockNumber: string;
         }>;
+
+        // Collect debug info about what log data lengths we're seeing
+        const dataLens = logs.slice(0, 20).map((l) => l.data?.length ?? 0);
+        const topicCounts = logs.slice(0, 20).map((l) => l.topics?.length ?? 0);
 
         // RevealedWithCallback / Revealed: data = exactly 352 bytes (706 hex chars incl. "0x")
         // No indexed params → topics has exactly 1 entry (the event sig hash)
@@ -248,11 +277,12 @@ async function tryEthLogs(): Promise<{
         const revSeq  = parseInt(seqHex, 16) || 0;
         const revBlock = parseInt(log.blockNumber, 16) || latestBlock;
 
-        return { randomBytes, revSequence: revSeq, blockNumber: revBlock };
+        return { randomBytes, revSequence: revSeq, blockNumber: revBlock,
+          debug: { rpc, range, total: logs.length, dataLens, topicCounts } };
       }
     }
     return null;
-  } catch {
+  } catch (e) {
     return null;
   }
 }
@@ -328,15 +358,18 @@ export async function GET(): Promise<NextResponse> {
   const timestamp = Math.floor(Date.now() / 1000);
 
   // Step 1: Get the latest sequence number and block (for display + fallback)
-  let seqState: { sequenceNumber: number; blockNumber: number } | null = null;
+  let seqState: { sequenceNumber: number; blockNumber: number; chainId: string } | null = null;
   let source: EntropyState["source"] = "fallback";
 
   seqState = await tryFortuna();
   if (seqState) {
     source = "fortuna";
   } else {
-    seqState = await tryOnChain();
-    if (seqState) source = "contract";
+    const onChain = await tryOnChain();
+    if (onChain) {
+      seqState = { ...onChain, chainId: BASE_CHAIN_ID };
+      source = "contract";
+    }
   }
 
   const sequenceNumber = seqState?.sequenceNumber ?? timestamp;
@@ -348,18 +381,34 @@ export async function GET(): Promise<NextResponse> {
   let revelation: { randomBytes: string; revSequence: number } | null = null;
   let revMethod = "";
 
+  // Debug collectors
+  let dbgFortunaRevUrls: Array<{ url: string; status: number | string }> | undefined;
+  let dbgEthLogs: { rpc: string; range: number; total: number; dataLens: number[]; topicCounts: number[]; error?: string } | undefined;
+  let dbgFailReason = "";
+
   if (seqState && seqState.sequenceNumber > 2) {
-    revelation = await tryFortunaRevelation(seqState.sequenceNumber);
-    if (revelation) revMethod = "fortuna-api";
+    const fortunaRev = await tryFortunaRevelation(seqState.sequenceNumber, seqState.chainId);
+    dbgFortunaRevUrls = fortunaRev?.urlStatuses ?? [];
+    if (fortunaRev) {
+      revelation = { randomBytes: fortunaRev.randomBytes, revSequence: fortunaRev.revSequence };
+      revMethod  = "fortuna-api";
+    } else {
+      dbgFailReason = "fortuna-rev-failed";
+    }
+  } else {
+    dbgFailReason = "no-seq-state";
   }
 
   if (!revelation) {
     const logRev = await tryEthLogs();
     if (logRev) {
+      dbgEthLogs = logRev.debug;
       revelation = { randomBytes: logRev.randomBytes, revSequence: logRev.revSequence };
       revMethod  = "eth-logs";
       // Use the revelation block for block hash (more provenance)
       if (logRev.blockNumber > 0) blockNumber = logRev.blockNumber;
+    } else {
+      dbgFailReason += ",eth-logs-failed";
     }
   }
 
@@ -399,7 +448,7 @@ export async function GET(): Promise<NextResponse> {
     sequenceNumber,
     providerAddress: DEFAULT_PROVIDER,
     contractAddress: ENTROPY_CONTRACT,
-    chainId:         "base",
+    chainId:         seqState?.chainId ?? "base",
     blockNumber,
     blockHash,
     seed,
@@ -412,12 +461,23 @@ export async function GET(): Promise<NextResponse> {
       revSequence:     revelation.revSequence,
       revMethod,
     } : {}),
+    _debug: {
+      fortunaChainId:    seqState?.chainId,
+      fortunaSeqNum:     seqState?.sequenceNumber,
+      fortunaRevUrls:    dbgFortunaRevUrls,
+      ethLogsRpc:        dbgEthLogs?.rpc,
+      ethLogsRange:      dbgEthLogs?.range,
+      ethLogsTotal:      dbgEthLogs?.total,
+      ethLogsDataLens:   dbgEthLogs?.dataLens,
+      ethLogsTopicCounts: dbgEthLogs?.topicCounts,
+      failReason:        dbgFailReason || undefined,
+    },
   };
 
   return NextResponse.json(result, {
     headers: {
-      // Cache for 60s — real entropy revelations happen continuously so this stays fresh
-      "Cache-Control": "public, max-age=60, s-maxage=60",
+      // Cache for 30s — short enough for debugging, long enough to avoid hammering RPCs
+      "Cache-Control": "public, max-age=30, s-maxage=30",
     },
   });
 }
