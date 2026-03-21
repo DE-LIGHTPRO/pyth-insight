@@ -21,7 +21,7 @@
 **Pyth Insight** — Oracle Intelligence Platform
 
 ### One-line description
-An analytics platform that stress-tests Pyth's confidence intervals with real historical data, powers a provably fair prediction game using actual Pyth Entropy revelation bytes, and answers oracle questions live via an AI analyst with 3,000+ live feeds as context.
+An analytics platform that stress-tests Pyth's confidence intervals with real historical data, powers a provably fair prediction game using actual Pyth Entropy revelation bytes, and answers oracle questions live via an AI analyst with 1,687 live feeds as context.
 
 ### Live Demo
 https://pyth-insight.vercel.app
@@ -31,7 +31,7 @@ https://github.com/[YOUR-USERNAME]/pyth-insight
 
 ### Which Pyth products are you using?
 
-- **Pyth Price Feeds (Hermes)** — Live price + CI data for all 3,000+ feeds via `hermes.pyth.network/v2/updates/price/latest`, dynamically discovered at runtime — no hardcoded feed IDs
+- **Pyth Price Feeds (Hermes)** — Live price + CI data for all ~1,687 feeds via `hermes.pyth.network/v2/updates/price/latest`, dynamically discovered at runtime — no hardcoded feed IDs
 - **Pyth Hermes Historical API** — Historical price snapshots (`/v2/updates/price/{timestamp}`) used by the CI Calibration engine to fetch 72+ data points over 3–14 day windows and compare empirical vs theoretical confidence coverage
 - **Pyth Entropy (Fortuna on Base)** — The Oracle Challenge game reads actual `RevealedWithCallback` events from the Entropy contract on Base via `eth_getLogs`, extracting the real 32-byte `randomNumber` that was produced by the commit-reveal protocol. These are the same bytes that appear on Basescan — fully verifiable. Contract: `0x98046Bd286715D3B0BC227Dd7a956b83D8978603`
 
@@ -41,7 +41,7 @@ https://github.com/[YOUR-USERNAME]/pyth-insight
 
 **Oracle Challenge** is a live Entropy-powered prediction game. Each round, the API reads the most recent `RevealedWithCallback` event from the Pyth Entropy contract on Base via `eth_getLogs`. The `randomNumber` field (32 bytes = `keccak256(userRandom XOR providerRandom)`) from that event is used directly as the round seed — this is the actual cryptographic output of the Fortuna provider's commit-reveal protocol. Feed index = `revelationBytes mod 12`. When real entropy bytes are obtained, the game shows a green **"✓ Real Entropy"** badge and displays the actual bytes with their revelation sequence number. Players then bet whether the next Pyth Hermes price lands inside or outside the live CI.
 
-**AI Oracle Analyst** is a streaming chat interface (Gemini with Claude fallback) injected with the current live Pyth feed snapshot as context — 3,000+ feeds worth of live prices and CI data — so it can answer questions about what is happening on-chain right now.
+**AI Oracle Analyst** is a streaming chat interface (Gemini with Claude fallback) injected with the current live Pyth feed snapshot as context — ~1,687 feeds worth of live prices and CI data — so it can answer questions about what is happening on-chain right now.
 
 **Learn** contains four educational pages covering Pyth's push-vs-pull model, confidence interval theory, Pyth Entropy commit-reveal mechanics, and the Pyth Hermes API.
 
@@ -294,7 +294,7 @@ This has real implications for DeFi lending protocols using Pyth CIs as liquidat
 
 **Other features:**
 - Oracle Challenge game — uses actual `RevealedWithCallback` bytes from the Pyth Entropy contract on Base (not just reading a sequence number — the real keccak256(userRandom ⊕ providerRandom) from a completed commit-reveal). Green "✓ Real Entropy" badge in-game with Basescan verification link
-- AI analyst — ask questions about what's happening on-chain right now, with 3,000+ live Pyth feeds injected as context
+- AI analyst — ask questions about what's happening on-chain right now, with ~1,687 live Pyth feeds injected as context
 
 **Live:** https://pyth-insight.vercel.app
 **Code:** https://github.com/[YOUR-USERNAME]/pyth-insight
