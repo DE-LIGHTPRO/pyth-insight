@@ -10,9 +10,12 @@
 const BENCHMARKS_URL =
   process.env.NEXT_PUBLIC_BENCHMARKS_URL ?? "https://benchmarks.pyth.network";
 
-// Optional Pyth Pro API key — if set, sent as Authorization header.
-// The free Benchmarks tier works without a key for /v1/updates/price/{ts},
-// but if you're seeing 401/403 errors, add PYTH_PRO_API_KEY to .env.local.
+// Hermes also supports historical price queries at the same path as live feeds.
+// We prefer Hermes because it requires no API key and we know it works.
+// Benchmarks is kept as fallback for when PYTH_PRO_API_KEY is available.
+const HERMES_URL = "https://hermes.pyth.network";
+
+// Optional Pyth Pro API key — enables Benchmarks fallback if Hermes historical fails.
 const PYTH_PRO_API_KEY = process.env.PYTH_PRO_API_KEY ?? "";
 
 function benchmarksHeaders(): HeadersInit {
@@ -102,36 +105,45 @@ export async function getPriceSnapshots(
   }
 
   // ── Rate-limit-aware batching ──────────────────────────────────────────────
-  // Benchmarks API limit: 30 req / 10 s.
-  // Sending 25 concurrent requests looked like ~250 req/s from the server's
-  // perspective → most requests were rejected → < 20 valid snapshots → error.
-  // Fix: small concurrent batches (5) with a 2s gap = 25 req/10s, well under.
+  // Strategy: try Hermes first (no auth needed, same API we use for live feeds).
+  // Hermes supports /v2/updates/price/{publish_time} for historical queries.
+  // If Hermes fails consistently, fall back to Benchmarks (requires PYTH_PRO_API_KEY).
   const BATCH_SIZE    = 5;
-  const BATCH_DELAY   = 2000; // ms between batches
-  const headers       = benchmarksHeaders();
+  const BATCH_DELAY   = 1500; // ms between batches — Hermes is more lenient
 
-  let firstErrorStatus: number | null = null; // track for better diagnostics
+  let hermesErrors = 0;
+  let firstErrorStatus: number | null = null;
+
+  async function fetchSnapshot(ts: number): Promise<unknown> {
+    // 1️⃣ Try Hermes historical endpoint (no auth required)
+    const hermesUrl = `${HERMES_URL}/v2/updates/price/${ts}?ids[]=${priceId}&parsed=true`;
+    const hr = await fetch(hermesUrl, { cache: "no-store" });
+    if (hr.ok) return hr.json();
+    hermesErrors++;
+    if (!firstErrorStatus) firstErrorStatus = hr.status;
+
+    // 2️⃣ Fall back to Benchmarks if we have a Pro API key
+    if (PYTH_PRO_API_KEY) {
+      const br = await fetch(
+        `${BENCHMARKS_URL}/v1/updates/price/${ts}?ids[]=${priceId}&parsed=true`,
+        { cache: "no-store", headers: benchmarksHeaders() }
+      );
+      if (br.ok) return br.json();
+      if (!firstErrorStatus) firstErrorStatus = br.status;
+    }
+
+    return null;
+  }
 
   for (let i = 0; i < timestamps.length; i += BATCH_SIZE) {
     const batch = timestamps.slice(i, i + BATCH_SIZE);
 
-    const results = await Promise.allSettled(
-      batch.map(async (ts) => {
-        const r = await fetch(
-          `${BENCHMARKS_URL}/v1/updates/price/${ts}?ids[]=${priceId}&parsed=true`,
-          { cache: "no-store", headers }
-        );
-        if (!r.ok) {
-          if (!firstErrorStatus) firstErrorStatus = r.status;
-          return null; // track but don't throw — let allSettled handle remaining
-        }
-        return r.json();
-      })
-    );
+    const results = await Promise.allSettled(batch.map(fetchSnapshot));
 
     for (const result of results) {
       if (result.status === "fulfilled" && result.value) {
-        const parsed = result.value?.parsed?.[0];
+        const data   = result.value as { parsed?: Array<{ price: { expo: number; price: string; conf: string; publish_time: number } }> };
+        const parsed = data?.parsed?.[0];
         if (parsed) {
           const expo  = parsed.price.expo;
           const scale = Math.pow(10, expo);
@@ -151,12 +163,9 @@ export async function getPriceSnapshots(
     }
   }
 
-  // Surface a helpful error if we got no data due to auth failures
+  // Surface a helpful error if we got no data
   if (snapshots.length === 0 && firstErrorStatus) {
-    const hint =
-      firstErrorStatus === 401 || firstErrorStatus === 403
-        ? `Benchmarks API returned ${firstErrorStatus}. Add PYTH_PRO_API_KEY to .env.local (free registration at https://pyth.network/developers/benchmark-access).`
-        : `Benchmarks API returned HTTP ${firstErrorStatus} for all requests.`;
+    const hint = `Historical price API returned HTTP ${firstErrorStatus} for all ${timestamps.length} requests. If this persists, add PYTH_PRO_API_KEY to .env.local.`;
     throw new Error(hint);
   }
 
