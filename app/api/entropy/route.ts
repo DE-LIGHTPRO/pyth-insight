@@ -92,27 +92,31 @@ async function tryFortuna(): Promise<{
     if (!res.ok) { debug.fortunaErr = `http-${res.status}`; return { result: null, debug }; }
 
     const raw = await res.json();
-    // API may return array OR object with a "chains" key
-    const chains: Array<{
-      id: string;
-      latest_block_number?: number;
-      sequence_number?: number;
-      latest_sequence_number?: number;
-    }> = Array.isArray(raw) ? raw : (raw.chains ?? raw.data ?? []);
+    // API may return array OR object keyed by chain ID
+    const chains: Array<Record<string, unknown>> =
+      Array.isArray(raw) ? raw : (raw.chains ?? raw.data ?? Object.values(raw));
     debug.fortunaChainCount = chains.length;
-    debug.fortunaChainIds   = chains.slice(0, 10).map((c) => c.id);
+    // Log actual keys from the first element so we can see the real field names
+    debug.fortunaFirstKeys  = chains.length > 0 ? Object.keys(chains[0]) : [];
+    // Try both "id" and "chain_id" (Fortuna API uses "id" in some versions, "chain_id" in others)
+    const getCid = (c: Record<string, unknown>) =>
+      String(c.id ?? c.chain_id ?? c.chainId ?? c.name ?? "");
+    debug.fortunaChainIds = chains.slice(0, 10).map(getCid);
 
-    const baseChain = chains.find(
-      (c) => c.id === BASE_CHAIN_ID || c.id === "base" || c.id?.toLowerCase().includes("base")
-    );
+    const baseChain = chains.find((c) => {
+      const cid = getCid(c).toLowerCase();
+      return cid === BASE_CHAIN_ID.toLowerCase() || cid === "base" || cid.includes("base");
+    });
     if (!baseChain) { debug.fortunaErr = "no-base-chain"; return { result: null, debug }; }
 
-    debug.fortunaChainId = baseChain.id;
-    const sequenceNumber = baseChain.latest_sequence_number ?? baseChain.sequence_number ?? 0;
-    const blockNumber    = baseChain.latest_block_number ?? 0;
+    const chainId        = getCid(baseChain) || BASE_CHAIN_ID;
+    debug.fortunaChainId = chainId;
+    const sequenceNumber =
+      Number(baseChain.latest_sequence_number ?? baseChain.sequence_number ?? 0);
+    const blockNumber    = Number(baseChain.latest_block_number ?? 0);
     debug.fortunaSeqNum  = sequenceNumber;
 
-    if (sequenceNumber > 0) return { result: { sequenceNumber, blockNumber, chainId: baseChain.id }, debug };
+    if (sequenceNumber > 0) return { result: { sequenceNumber, blockNumber, chainId }, debug };
     debug.fortunaErr = "seq-zero";
     return { result: null, debug };
   } catch (e) {
@@ -185,11 +189,26 @@ async function tryBaseScan(): Promise<{
 }> {
   const debug: Record<string, unknown> = {};
   try {
+    // Get current block so we can compute a narrow, recent fromBlock.
+    // BaseScan rejects "fromBlock=0" without an API key but accepts specific ranges.
+    let fromBlock = 43000000; // safe fallback (~last few days on Base mainnet)
+    try {
+      const bnRes = await rpcFetch({ jsonrpc: "2.0", id: 99, method: "eth_blockNumber", params: [] });
+      if (bnRes) {
+        const bnJson = await bnRes.json();
+        const latest = parseInt(bnJson.result as string, 16);
+        if (latest > 0) fromBlock = Math.max(43000000, latest - 100000); // ~14 hours back
+      }
+    } catch { /* use fallback fromBlock */ }
+    debug.bsFromBlock = fromBlock;
+
     // Ask for the 5 most recent logs from the Entropy contract, newest first
+    const apiKey = process.env.BASESCAN_API_KEY ?? "";
     const url =
       `https://api.basescan.org/api?module=logs&action=getLogs` +
       `&address=${ENTROPY_CONTRACT}` +
-      `&fromBlock=0&toBlock=latest&page=1&offset=5&sort=desc`;
+      `&fromBlock=${fromBlock}&toBlock=latest&page=1&offset=5&sort=desc` +
+      (apiKey ? `&apikey=${apiKey}` : "");
 
     const res = await fetch(url, {
       headers: { Accept: "application/json" },
