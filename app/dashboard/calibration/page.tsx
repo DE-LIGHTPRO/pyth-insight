@@ -157,7 +157,7 @@ export default function CalibrationPage() {
             <span className="text-xs text-purple-400 font-medium tracking-wide uppercase">
               Oracle Intelligence
             </span>
-            <span className="text-xs text-slate-600">via Pyth Benchmarks</span>
+            <span className="text-xs text-slate-600">via Pyth Hermes</span>
           </div>
           <h1 className="text-2xl font-bold text-white">CI Calibration Analysis</h1>
           <p className="text-slate-400 text-sm mt-1 max-w-xl leading-relaxed">
@@ -167,12 +167,12 @@ export default function CalibrationPage() {
           </p>
         </div>
         <a
-          href="https://benchmarks.pyth.network"
+          href="https://hermes.pyth.network"
           target="_blank"
           rel="noopener noreferrer"
           className="text-xs text-purple-400 hover:text-purple-300 transition-colors mt-1"
         >
-          Pyth Benchmarks API →
+          Pyth Hermes API →
         </a>
       </div>
 
@@ -269,10 +269,10 @@ export default function CalibrationPage() {
         <div className="rounded-xl border border-white/8 bg-[rgb(17,17,25)] p-8 flex flex-col items-center gap-4">
           <div className="flex flex-col items-center gap-3">
             <div className="w-10 h-10 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-white font-medium">Fetching historical Benchmarks data…</p>
+            <p className="text-white font-medium">Fetching historical Hermes data…</p>
             <p className="text-slate-500 text-sm text-center max-w-sm">
               Sampling {asset} price + CI snapshots every 60 min over {days} days
-              from <code className="text-slate-400">benchmarks.pyth.network</code>
+              from <code className="text-slate-400">hermes.pyth.network</code>
             </p>
           </div>
           <div className="w-full max-w-md bg-white/5 rounded-full h-1 overflow-hidden mt-2">

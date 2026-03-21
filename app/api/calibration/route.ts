@@ -76,7 +76,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
     if (snapshots.length < 10) {
       return NextResponse.json(
-        { error: `Only ${snapshots.length} snapshots returned. The Benchmarks API may require a free API key — check server logs for HTTP status, or add PYTH_PRO_API_KEY to .env.local.` },
+        { error: `Only ${snapshots.length} snapshots returned. The Hermes historical API may be rate-limiting requests — try again in a moment, or check server logs for HTTP status.` },
         { status: 503 }
       );
     }
