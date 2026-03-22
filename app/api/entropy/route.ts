@@ -33,7 +33,9 @@ const FORTUNA_BASE  = "https://fortuna.dourolabs.app";
 const BASE_CHAIN_ID = "evm-base";
 
 // Public Base RPC endpoints — tried in order; first success wins
+// If ALCHEMY_RPC_URL is set it goes first (supports unlimited block ranges for eth_getLogs)
 const BASE_RPCS = [
+  ...(process.env.ALCHEMY_RPC_URL ? [process.env.ALCHEMY_RPC_URL] : []),
   "https://mainnet.base.org",
   "https://base.llamarpc.com",
   "https://base-rpc.publicnode.com",
@@ -107,21 +109,29 @@ async function tryFortuna(): Promise<{
       if (!baseId) { debug.fortunaErr = "no-base-chain"; return { result: null, debug }; }
       debug.fortunaChainId = baseId;
 
-      // Fetch individual chain details — try several URL patterns since the exact
-      // path varies across Fortuna API versions
-      const chainInfoUrls = [
-        `${FORTUNA_BASE}/v1/chains/${baseId}`,
-        `${FORTUNA_BASE}/v1/chains/${baseId}/status`,
-        `${FORTUNA_BASE}/v1/chains/${baseId}/info`,
-      ];
+      // Fetch individual chain details — try many URL/ID patterns since the Fortuna
+      // API version and chain ID format varies.
+      // Known chain ID aliases: "base", "evm-base", "8453", "evm-8453"
+      const chainIdAliases = Array.from(new Set([
+        baseId, "evm-base", "8453", "evm-8453", "base", "base-mainnet",
+      ]));
+      const chainInfoUrls: string[] = [];
+      for (const cid of chainIdAliases) {
+        chainInfoUrls.push(
+          `${FORTUNA_BASE}/v1/chains/${cid}`,
+          `${FORTUNA_BASE}/v1/chains/${cid}/status`,
+        );
+      }
       let chainData: Record<string, unknown> | null = null;
+      const chainStatusMap: Record<string, number> = {};
       for (const u of chainInfoUrls) {
         try {
           const r = await fetch(u, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(5000) });
-          debug.fortunaChainStatus = r.status;
-          if (r.ok) { chainData = await r.json() as Record<string, unknown>; break; }
+          chainStatusMap[u.replace(FORTUNA_BASE, "")] = r.status;
+          if (r.ok) { chainData = await r.json() as Record<string, unknown>; debug.fortunaChainInfoUrl = u; break; }
         } catch { /* try next */ }
       }
+      debug.fortunaChainStatuses = chainStatusMap;
       if (!chainData) { debug.fortunaErr = "chain-info-all-failed"; return { result: null, debug }; }
       debug.fortunaChainData = chainData;
 
@@ -197,11 +207,15 @@ async function tryFortunaRevelation(latestSeq: number, chainId: string): Promise
   };
 
   // ── Try 1: fetch a page of recent revelations (no seq needed) ───────────────
-  const listUrls = [
-    `${FORTUNA_BASE}/v1/chains/${chainId}/revelations?limit=1&sort=desc`,
-    `${FORTUNA_BASE}/v1/chains/${chainId}/revelations?page=1&per_page=1`,
-    `${FORTUNA_BASE}/v1/chains/${chainId}/revelations`,
-  ];
+  // Try multiple chain ID aliases since Fortuna may use different identifiers
+  const chainIdVariants = Array.from(new Set([chainId, "evm-base", "base", "8453", "evm-8453"]));
+  const listUrls: string[] = [];
+  for (const cid of chainIdVariants) {
+    listUrls.push(
+      `${FORTUNA_BASE}/v1/chains/${cid}/revelations?limit=1&sort=desc`,
+      `${FORTUNA_BASE}/v1/chains/${cid}/revelations`,
+    );
+  }
   for (const url of listUrls) {
     try {
       const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(5000) });
@@ -259,28 +273,37 @@ async function tryBaseScan(): Promise<{
 }> {
   const debug: Record<string, unknown> = {};
   try {
-    // Get current block so we can compute a narrow, recent fromBlock.
-    // BaseScan rejects "fromBlock=0" without an API key but accepts specific ranges.
-    let fromBlock = 43000000; // safe fallback (~last few days on Base mainnet)
-    try {
-      const bnRes = await rpcFetch({ jsonrpc: "2.0", id: 99, method: "eth_blockNumber", params: [] });
-      if (bnRes) {
-        const bnJson = await bnRes.json();
-        const latest = parseInt(bnJson.result as string, 16);
-        if (latest > 0) fromBlock = Math.max(43000000, latest - 100000); // ~14 hours back
-      }
-    } catch { /* use fallback fromBlock */ }
+    const apiKey = process.env.BASESCAN_API_KEY ?? process.env.ETHERSCAN_API_KEY ?? "";
+
+    // When we have an Etherscan.io V2 key, search from genesis (fromBlock=1) because
+    // Etherscan's event index handles any range instantly.  Their API requires a key
+    // for genesis-to-latest queries, but returns ALL historical events in one call.
+    //
+    // Without a proper key, fall back to a narrow recent window that doesn't require auth.
+    const hasEtherscanKey = !!apiKey;
+    let fromBlock = 1; // default: full history when we have a key
+    if (!hasEtherscanKey) {
+      // No key → use a narrow recent range that BaseScan accepts unauthenticated
+      try {
+        const bnRes = await rpcFetch({ jsonrpc: "2.0", id: 99, method: "eth_blockNumber", params: [] });
+        if (bnRes) {
+          const bnJson = await bnRes.json();
+          const latest = parseInt(bnJson.result as string, 16);
+          if (latest > 0) fromBlock = Math.max(43000000, latest - 10000); // ~1.4 hours back
+        }
+      } catch { fromBlock = 43900000; }
+    }
     debug.bsFromBlock = fromBlock;
+    debug.bsHasKey = hasEtherscanKey;
 
     // Ask for the 5 most recent logs from the Entropy contract, newest first.
-    // Try multiple endpoints in order — some keys work with Etherscan V2, some with legacy BaseScan.
-    const apiKey = process.env.BASESCAN_API_KEY ?? process.env.ETHERSCAN_API_KEY ?? "";
     const logsParams =
       `&address=${ENTROPY_CONTRACT}&fromBlock=${fromBlock}&toBlock=latest&page=1&offset=5&sort=desc`;
     const urlsToTry = apiKey ? [
-      // Etherscan API V2 (new unified API, requires Etherscan.io key)
+      // Etherscan API V2 (new unified API — requires an Etherscan.io account key,
+      // NOT a BaseScan-specific key; get one at https://etherscan.io/myapikey)
       `https://api.etherscan.io/v2/api?chainid=8453&module=logs&action=getLogs${logsParams}&apikey=${apiKey}`,
-      // Legacy BaseScan (works with BaseScan-specific keys)
+      // Legacy BaseScan fallback (some older keys still work here)
       `https://api.basescan.org/api?module=logs&action=getLogs${logsParams}&apikey=${apiKey}`,
     ] : [
       `https://api.basescan.org/api?module=logs&action=getLogs${logsParams}`,
@@ -374,9 +397,14 @@ async function tryEthLogs(): Promise<{
     // Step 2: Try progressively larger block ranges across all RPCs.
     // Contract usage is low so we need to look back further.
     // Base = 2 blocks/s → 50000 blocks ≈ 7 hours, 200000 ≈ 28 hours
-    const BLOCK_RANGES = [1000, 10000, 50000, 200000];
+    // If ALCHEMY_RPC_URL is set, try querying from the contract's deployment era (~block 5M on Base)
+    const hasAlchemy = !!process.env.ALCHEMY_RPC_URL;
+    const BLOCK_RANGES = hasAlchemy
+      ? [10000, 200000, latestBlock - 5_000_000]  // Alchemy: try from ~block 5M forward
+      : [1000, 10000, 50000, 200000];
     const EXPECTED_LEN = 2 + REVEALED_DATA_BYTES * 2; // 706 hex chars
     const rpcResults: Array<{ rpc: string; range: number; total: number; rpcError?: string; dataLens: number[] }> = [];
+    debug.ethHasAlchemy = hasAlchemy;
 
     for (const rpc of BASE_RPCS) {
       for (const range of BLOCK_RANGES) {
