@@ -92,14 +92,52 @@ async function tryFortuna(): Promise<{
     if (!res.ok) { debug.fortunaErr = `http-${res.status}`; return { result: null, debug }; }
 
     const raw = await res.json();
-    // API may return array OR object keyed by chain ID
+
+    // ── Case 1: Fortuna returns an array of chain-ID strings ─────────────────
+    // e.g. ["sanko", "base", "optimism", ...]
+    // In this case we must fetch /v1/chains/{id} separately for sequence numbers.
+    if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === "string") {
+      const chainIds = raw as string[];
+      debug.fortunaChainCount = chainIds.length;
+      debug.fortunaChainIds   = chainIds.slice(0, 10);
+
+      const baseId = chainIds.find(
+        (id) => id === BASE_CHAIN_ID || id === "base" || id.toLowerCase().includes("base")
+      );
+      if (!baseId) { debug.fortunaErr = "no-base-chain"; return { result: null, debug }; }
+      debug.fortunaChainId = baseId;
+
+      // Fetch individual chain details for sequence number + block
+      const chainRes = await fetch(`${FORTUNA_BASE}/v1/chains/${baseId}`, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(5000),
+      });
+      debug.fortunaChainStatus = chainRes.status;
+      if (!chainRes.ok) { debug.fortunaErr = `chain-http-${chainRes.status}`; return { result: null, debug }; }
+
+      const chainData = await chainRes.json() as Record<string, unknown>;
+      debug.fortunaChainData = chainData;
+
+      const sequenceNumber = Number(
+        chainData.latest_sequence_number ?? chainData.sequence_number ??
+        chainData.latestSequenceNumber ?? 0
+      );
+      const blockNumber = Number(
+        chainData.latest_block_number ?? chainData.latestBlockNumber ?? 0
+      );
+      debug.fortunaSeqNum = sequenceNumber;
+
+      if (sequenceNumber > 0) return { result: { sequenceNumber, blockNumber, chainId: baseId }, debug };
+      debug.fortunaErr = "seq-zero";
+      return { result: null, debug };
+    }
+
+    // ── Case 2: Fortuna returns array of objects or keyed object ─────────────
     const chains: Array<Record<string, unknown>> =
       Array.isArray(raw) ? raw : (raw.chains ?? raw.data ?? Object.values(raw));
     debug.fortunaChainCount = chains.length;
-    // Capture the first raw item so we can see actual field names/values
     debug.fortunaFirstItem  = chains.length > 0 ? chains[0] : null;
     debug.fortunaFirstKeys  = chains.length > 0 ? Object.keys(chains[0]) : [];
-    // Fortuna chains may be objects {id, ...} OR tuples [chainId, ...] depending on API version
     const getCid = (c: Record<string, unknown>) =>
       String(c.id ?? c.chain_id ?? c.chainId ?? c.name ?? c["0"] ?? "");
     debug.fortunaChainIds = chains.slice(0, 5).map(getCid);
@@ -112,7 +150,6 @@ async function tryFortuna(): Promise<{
 
     const chainId        = getCid(baseChain) || BASE_CHAIN_ID;
     debug.fortunaChainId = chainId;
-    // Try both named fields and positional tuple indices
     const sequenceNumber = Number(
       baseChain.latest_sequence_number ?? baseChain.sequence_number ??
       baseChain["2"] ?? baseChain["1"] ?? 0
@@ -120,7 +157,7 @@ async function tryFortuna(): Promise<{
     const blockNumber = Number(
       baseChain.latest_block_number ?? baseChain["3"] ?? baseChain["4"] ?? 0
     );
-    debug.fortunaSeqNum  = sequenceNumber;
+    debug.fortunaSeqNum = sequenceNumber;
 
     if (sequenceNumber > 0) return { result: { sequenceNumber, blockNumber, chainId }, debug };
     debug.fortunaErr = "seq-zero";
@@ -209,31 +246,37 @@ async function tryBaseScan(): Promise<{
     debug.bsFromBlock = fromBlock;
 
     // Ask for the 5 most recent logs from the Entropy contract, newest first.
-    // BaseScan migrated to Etherscan API V2 — use api.etherscan.io/v2/api with chainid=8453.
-    // Falls back to legacy api.basescan.org if the env var is missing.
+    // Try multiple endpoints in order — some keys work with Etherscan V2, some with legacy BaseScan.
     const apiKey = process.env.BASESCAN_API_KEY ?? process.env.ETHERSCAN_API_KEY ?? "";
-    const url = apiKey
-      ? `https://api.etherscan.io/v2/api?chainid=8453&module=logs&action=getLogs` +
-        `&address=${ENTROPY_CONTRACT}` +
-        `&fromBlock=${fromBlock}&toBlock=latest&page=1&offset=5&sort=desc&apikey=${apiKey}`
-      : `https://api.basescan.org/api?module=logs&action=getLogs` +
-        `&address=${ENTROPY_CONTRACT}` +
-        `&fromBlock=${fromBlock}&toBlock=latest&page=1&offset=5&sort=desc`;
-    debug.bsUrl = url.replace(apiKey, "***");
+    const logsParams =
+      `&address=${ENTROPY_CONTRACT}&fromBlock=${fromBlock}&toBlock=latest&page=1&offset=5&sort=desc`;
+    const urlsToTry = apiKey ? [
+      // Etherscan API V2 (new unified API, requires Etherscan.io key)
+      `https://api.etherscan.io/v2/api?chainid=8453&module=logs&action=getLogs${logsParams}&apikey=${apiKey}`,
+      // Legacy BaseScan (works with BaseScan-specific keys)
+      `https://api.basescan.org/api?module=logs&action=getLogs${logsParams}&apikey=${apiKey}`,
+    ] : [
+      `https://api.basescan.org/api?module=logs&action=getLogs${logsParams}`,
+    ];
 
-    const res = await fetch(url, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(8000),
-    });
-    debug.bsStatus = res.status;
-    if (!res.ok) { debug.bsErr = `http-${res.status}`; return { result: null, debug }; }
+    let json: { status: string; message?: string; result?: unknown } | null = null;
+    for (const url of urlsToTry) {
+      debug.bsUrl = url.replace(apiKey, "***");
+      try {
+        const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(8000) });
+        debug.bsStatus = res.status;
+        if (!res.ok) { debug.bsErr = `http-${res.status}`; continue; }
+        const candidate = await res.json() as { status: string; message?: string; result?: unknown };
+        debug.bsApiStatus = candidate.status;
+        debug.bsMessage   = candidate.message;
+        if (candidate.status === "1") { json = candidate; break; }
+        debug.bsErr = candidate.message ?? "notok";
+      } catch (e) { debug.bsErr = String(e).slice(0, 60); }
+    }
+    if (!json) return { result: null, debug };
 
-    const json = await res.json();
-    debug.bsApiStatus = json.status;
-    debug.bsMessage   = json.message;
-
-    if (json.status !== "1" || !Array.isArray(json.result) || json.result.length === 0) {
-      debug.bsErr = json.message ?? "no-results";
+    if (!Array.isArray(json.result) || json.result.length === 0) {
+      debug.bsErr = "empty-result";
       return { result: null, debug };
     }
 
