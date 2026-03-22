@@ -96,12 +96,13 @@ async function tryFortuna(): Promise<{
     const chains: Array<Record<string, unknown>> =
       Array.isArray(raw) ? raw : (raw.chains ?? raw.data ?? Object.values(raw));
     debug.fortunaChainCount = chains.length;
-    // Log actual keys from the first element so we can see the real field names
+    // Capture the first raw item so we can see actual field names/values
+    debug.fortunaFirstItem  = chains.length > 0 ? chains[0] : null;
     debug.fortunaFirstKeys  = chains.length > 0 ? Object.keys(chains[0]) : [];
-    // Try both "id" and "chain_id" (Fortuna API uses "id" in some versions, "chain_id" in others)
+    // Fortuna chains may be objects {id, ...} OR tuples [chainId, ...] depending on API version
     const getCid = (c: Record<string, unknown>) =>
-      String(c.id ?? c.chain_id ?? c.chainId ?? c.name ?? "");
-    debug.fortunaChainIds = chains.slice(0, 10).map(getCid);
+      String(c.id ?? c.chain_id ?? c.chainId ?? c.name ?? c["0"] ?? "");
+    debug.fortunaChainIds = chains.slice(0, 5).map(getCid);
 
     const baseChain = chains.find((c) => {
       const cid = getCid(c).toLowerCase();
@@ -111,9 +112,14 @@ async function tryFortuna(): Promise<{
 
     const chainId        = getCid(baseChain) || BASE_CHAIN_ID;
     debug.fortunaChainId = chainId;
-    const sequenceNumber =
-      Number(baseChain.latest_sequence_number ?? baseChain.sequence_number ?? 0);
-    const blockNumber    = Number(baseChain.latest_block_number ?? 0);
+    // Try both named fields and positional tuple indices
+    const sequenceNumber = Number(
+      baseChain.latest_sequence_number ?? baseChain.sequence_number ??
+      baseChain["2"] ?? baseChain["1"] ?? 0
+    );
+    const blockNumber = Number(
+      baseChain.latest_block_number ?? baseChain["3"] ?? baseChain["4"] ?? 0
+    );
     debug.fortunaSeqNum  = sequenceNumber;
 
     if (sequenceNumber > 0) return { result: { sequenceNumber, blockNumber, chainId }, debug };
@@ -202,13 +208,18 @@ async function tryBaseScan(): Promise<{
     } catch { /* use fallback fromBlock */ }
     debug.bsFromBlock = fromBlock;
 
-    // Ask for the 5 most recent logs from the Entropy contract, newest first
-    const apiKey = process.env.BASESCAN_API_KEY ?? "";
-    const url =
-      `https://api.basescan.org/api?module=logs&action=getLogs` +
-      `&address=${ENTROPY_CONTRACT}` +
-      `&fromBlock=${fromBlock}&toBlock=latest&page=1&offset=5&sort=desc` +
-      (apiKey ? `&apikey=${apiKey}` : "");
+    // Ask for the 5 most recent logs from the Entropy contract, newest first.
+    // BaseScan migrated to Etherscan API V2 — use api.etherscan.io/v2/api with chainid=8453.
+    // Falls back to legacy api.basescan.org if the env var is missing.
+    const apiKey = process.env.BASESCAN_API_KEY ?? process.env.ETHERSCAN_API_KEY ?? "";
+    const url = apiKey
+      ? `https://api.etherscan.io/v2/api?chainid=8453&module=logs&action=getLogs` +
+        `&address=${ENTROPY_CONTRACT}` +
+        `&fromBlock=${fromBlock}&toBlock=latest&page=1&offset=5&sort=desc&apikey=${apiKey}`
+      : `https://api.basescan.org/api?module=logs&action=getLogs` +
+        `&address=${ENTROPY_CONTRACT}` +
+        `&fromBlock=${fromBlock}&toBlock=latest&page=1&offset=5&sort=desc`;
+    debug.bsUrl = url.replace(apiKey, "***");
 
     const res = await fetch(url, {
       headers: { Accept: "application/json" },
