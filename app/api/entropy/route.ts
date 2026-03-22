@@ -107,15 +107,22 @@ async function tryFortuna(): Promise<{
       if (!baseId) { debug.fortunaErr = "no-base-chain"; return { result: null, debug }; }
       debug.fortunaChainId = baseId;
 
-      // Fetch individual chain details for sequence number + block
-      const chainRes = await fetch(`${FORTUNA_BASE}/v1/chains/${baseId}`, {
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
-      });
-      debug.fortunaChainStatus = chainRes.status;
-      if (!chainRes.ok) { debug.fortunaErr = `chain-http-${chainRes.status}`; return { result: null, debug }; }
-
-      const chainData = await chainRes.json() as Record<string, unknown>;
+      // Fetch individual chain details — try several URL patterns since the exact
+      // path varies across Fortuna API versions
+      const chainInfoUrls = [
+        `${FORTUNA_BASE}/v1/chains/${baseId}`,
+        `${FORTUNA_BASE}/v1/chains/${baseId}/status`,
+        `${FORTUNA_BASE}/v1/chains/${baseId}/info`,
+      ];
+      let chainData: Record<string, unknown> | null = null;
+      for (const u of chainInfoUrls) {
+        try {
+          const r = await fetch(u, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(5000) });
+          debug.fortunaChainStatus = r.status;
+          if (r.ok) { chainData = await r.json() as Record<string, unknown>; break; }
+        } catch { /* try next */ }
+      }
+      if (!chainData) { debug.fortunaErr = "chain-info-all-failed"; return { result: null, debug }; }
       debug.fortunaChainData = chainData;
 
       const sequenceNumber = Number(
@@ -178,45 +185,65 @@ async function tryFortunaRevelation(latestSeq: number, chainId: string): Promise
   revSequence: number;
   urlStatuses: Array<{ url: string; status: number | string }>;
 } | null> {
-  const seqToTry = Math.max(1, latestSeq - 2);
   const urlStatuses: Array<{ url: string; status: number | string }> = [];
 
-  // Try multiple sequence offsets (in case recent ones aren't fulfilled yet)
-  const seqsToTry = [seqToTry, Math.max(1, latestSeq - 5), Math.max(1, latestSeq - 10)];
+  // Helper to extract random bytes from a revelation response object
+  const extractBytes = (data: Record<string, unknown>): string | null => {
+    const bytes = data.revelation ?? data.random_number ?? data.randomNumber ??
+      data.value ?? data.random ?? data.revealed_random ?? data.randomness;
+    if (typeof bytes === "string" && bytes.startsWith("0x") && bytes.length >= 66)
+      return bytes.slice(0, 66);
+    return null;
+  };
 
-  // Try multiple known Fortuna API URL patterns with the actual chain ID
-  for (const seq of seqsToTry) {
-    const urls = [
-      `${FORTUNA_BASE}/v1/chains/${chainId}/revelations/${seq}`,
-      `${FORTUNA_BASE}/v1/revelations/${chainId}/${seq}`,
-      `${FORTUNA_BASE}/v1/chains/${BASE_CHAIN_ID}/revelations/${seq}`,
+  // ── Try 1: fetch a page of recent revelations (no seq needed) ───────────────
+  const listUrls = [
+    `${FORTUNA_BASE}/v1/chains/${chainId}/revelations?limit=1&sort=desc`,
+    `${FORTUNA_BASE}/v1/chains/${chainId}/revelations?page=1&per_page=1`,
+    `${FORTUNA_BASE}/v1/chains/${chainId}/revelations`,
+  ];
+  for (const url of listUrls) {
+    try {
+      const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(5000) });
+      urlStatuses.push({ url, status: res.status });
+      if (!res.ok) continue;
+      const data = await res.json();
+      // Response might be array or { revelations: [...] } or single object
+      const items: unknown[] = Array.isArray(data) ? data : (data.revelations ?? data.data ?? data.items ?? [data]);
+      for (const item of items) {
+        const bytes = extractBytes(item as Record<string, unknown>);
+        const seq = Number((item as Record<string, unknown>).sequence_number ?? (item as Record<string, unknown>).sequenceNumber ?? 0);
+        if (bytes) return { randomBytes: bytes, revSequence: seq, urlStatuses };
+      }
+    } catch (e) { urlStatuses.push({ url, status: String(e).slice(0, 60) }); }
+  }
+
+  // ── Try 2: specific sequence numbers (only if latestSeq looks real, not a timestamp) ──
+  // Unix timestamps are > 1_700_000_000; real entropy seq numbers are much smaller
+  if (latestSeq < 1_700_000_000) {
+    const seqsToTry = [
+      Math.max(1, latestSeq - 2),
+      Math.max(1, latestSeq - 5),
+      Math.max(1, latestSeq - 10),
     ];
-
-    for (const url of urls) {
-      try {
-        const res = await fetch(url, {
-          headers: { Accept: "application/json" },
-          signal: AbortSignal.timeout(4000),
-        });
-        urlStatuses.push({ url, status: res.status });
-        if (!res.ok) continue;
-        const data = await res.json();
-        const bytes =
-          data.revelation ??
-          data.random_number ??
-          data.randomNumber ??
-          data.value ??
-          data.random ??
-          data.revealed_random ??
-          data.randomness;
-        if (typeof bytes === "string" && bytes.startsWith("0x") && bytes.length >= 66) {
-          return { randomBytes: bytes.slice(0, 66), revSequence: seq, urlStatuses };
-        }
-      } catch (e) {
-        urlStatuses.push({ url, status: String(e).slice(0, 60) });
+    for (const seq of seqsToTry) {
+      const urls = [
+        `${FORTUNA_BASE}/v1/chains/${chainId}/revelations/${seq}`,
+        `${FORTUNA_BASE}/v1/revelations/${chainId}/${seq}`,
+      ];
+      for (const url of urls) {
+        try {
+          const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(4000) });
+          urlStatuses.push({ url, status: res.status });
+          if (!res.ok) continue;
+          const data = await res.json() as Record<string, unknown>;
+          const bytes = extractBytes(data);
+          if (bytes) return { randomBytes: bytes, revSequence: seq, urlStatuses };
+        } catch (e) { urlStatuses.push({ url, status: String(e).slice(0, 60) }); }
       }
     }
   }
+
   return null;
 }
 
@@ -516,8 +543,12 @@ export async function GET(): Promise<NextResponse> {
   let revelation: { randomBytes: string; revSequence: number } | null = null;
   let revMethod = "";
 
-  if (seqState && seqState.sequenceNumber > 2) {
-    const fortunaRev = await tryFortunaRevelation(seqState.sequenceNumber, seqState.chainId);
+  // Always try the Fortuna revelation endpoint — the list-based path doesn't need a seq number.
+  // Use the chainId from seqState if available, otherwise fall back to "base".
+  {
+    const revChainId = seqState?.chainId ?? "base";
+    const revSeqNum  = seqState?.sequenceNumber ?? 0;
+    const fortunaRev = await tryFortunaRevelation(revSeqNum, revChainId);
     dbg.fortunaRevUrls = fortunaRev?.urlStatuses ?? [];
     if (fortunaRev) {
       revelation = { randomBytes: fortunaRev.randomBytes, revSequence: fortunaRev.revSequence };
