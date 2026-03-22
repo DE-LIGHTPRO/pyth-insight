@@ -233,30 +233,40 @@ async function tryFortunaRevelation(latestSeq: number, chainId: string): Promise
     } catch (e) { urlStatuses.push({ url, status: String(e).slice(0, 60) }); }
   }
 
-  // ── Try 2: specific sequence numbers (only if latestSeq looks real, not a timestamp) ──
-  // Unix timestamps are > 1_700_000_000; real entropy seq numbers are much smaller
-  if (latestSeq < 1_700_000_000) {
-    const seqsToTry = [
-      Math.max(1, latestSeq - 2),
-      Math.max(1, latestSeq - 5),
-      Math.max(1, latestSeq - 10),
-    ];
-    for (const seq of seqsToTry) {
-      const urls = [
-        `${FORTUNA_BASE}/v1/chains/${chainId}/revelations/${seq}`,
-        `${FORTUNA_BASE}/v1/revelations/${chainId}/${seq}`,
-      ];
-      for (const url of urls) {
-        try {
-          const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(4000) });
-          urlStatuses.push({ url, status: res.status });
-          if (!res.ok) continue;
-          const data = await res.json() as Record<string, unknown>;
-          const bytes = extractBytes(data);
-          if (bytes) return { randomBytes: bytes, revSequence: seq, urlStatuses };
-        } catch (e) { urlStatuses.push({ url, status: String(e).slice(0, 60) }); }
-      }
-    }
+  // ── Try 2: specific sequence numbers using the confirmed-working endpoint format ──
+  // From debug: /v1/revelations/{chainId}/{seq} returns 500 (exists!) while
+  // /v1/chains/{chainId}/revelations/{seq} returns 404 (wrong path).
+  // 500 on seq=1 means that seq was never fulfilled — try a range of small seqs
+  // in case the contract had a few test runs early on.
+  // Only try if latestSeq is a real seq number (< 1_700_000_000; otherwise it's a timestamp).
+  const baseSeq = latestSeq < 1_700_000_000 ? latestSeq : 0;
+  // Build a deduplicated set of candidate sequence numbers to try
+  const seqCandidates: number[] = [];
+  if (baseSeq > 0) {
+    seqCandidates.push(
+      Math.max(1, baseSeq - 2),
+      Math.max(1, baseSeq - 5),
+      Math.max(1, baseSeq - 10),
+    );
+  }
+  // Always probe small sequence numbers in case contract had early test use
+  for (const s of [1, 2, 3, 4, 5, 10, 50, 100]) {
+    if (!seqCandidates.includes(s)) seqCandidates.push(s);
+  }
+
+  for (const seq of seqCandidates) {
+    // Use the confirmed real endpoint format: /v1/revelations/{chainId}/{seq}
+    // (the /v1/chains/{chainId}/revelations/{seq} path returns 404)
+    const url = `${FORTUNA_BASE}/v1/revelations/${chainId}/${seq}`;
+    try {
+      const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(3000) });
+      urlStatuses.push({ url, status: res.status });
+      if (!res.ok) continue;   // 404 = not found, 500 = seq doesn't exist/unfulfilled
+      const data = await res.json() as Record<string, unknown>;
+      const bytes = extractBytes(data);
+      if (bytes) return { randomBytes: bytes, revSequence: seq, urlStatuses };
+      urlStatuses.push({ url: url + "#no-bytes", status: "parsed-no-bytes" });
+    } catch (e) { urlStatuses.push({ url, status: String(e).slice(0, 60) }); }
   }
 
   return { urlStatuses };
@@ -324,8 +334,12 @@ async function tryBaseScan(): Promise<{
         const candidate = await res.json() as { status: string; message?: string; result?: unknown };
         attempt.apiStatus = candidate.status;
         attempt.msg = candidate.message;
+        // When status="0", capture the result field — it often contains the real error
+        // e.g. result="Invalid API Key" vs result=[] for "No records found"
+        if (candidate.status !== "1") attempt.err = typeof candidate.result === "string"
+          ? candidate.result.slice(0, 60)
+          : (candidate.message ?? "api-notok");
         if (candidate.status === "1") { json = candidate; break; }
-        attempt.err = candidate.message ?? "api-notok";
       } catch (e) { attempt.err = String(e).slice(0, 80); }
     }
     debug.bsAttempts = bsAttempts;
