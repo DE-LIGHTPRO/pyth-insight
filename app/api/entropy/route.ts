@@ -191,10 +191,10 @@ async function tryFortuna(): Promise<{
 // Pyth Entropy sequences are fulfilled within seconds, so seqNum - 2 is safe.
 
 async function tryFortunaRevelation(latestSeq: number, chainId: string): Promise<{
-  randomBytes: string;
-  revSequence: number;
+  randomBytes?: string;
+  revSequence?: number;
   urlStatuses: Array<{ url: string; status: number | string }>;
-} | null> {
+}> {
   const urlStatuses: Array<{ url: string; status: number | string }> = [];
 
   // Helper to extract random bytes from a revelation response object
@@ -228,6 +228,7 @@ async function tryFortunaRevelation(latestSeq: number, chainId: string): Promise
         const bytes = extractBytes(item as Record<string, unknown>);
         const seq = Number((item as Record<string, unknown>).sequence_number ?? (item as Record<string, unknown>).sequenceNumber ?? 0);
         if (bytes) return { randomBytes: bytes, revSequence: seq, urlStatuses };
+        urlStatuses.push({ url: url + "#no-bytes-in-item", status: "parsed-no-bytes" });
       }
     } catch (e) { urlStatuses.push({ url, status: String(e).slice(0, 60) }); }
   }
@@ -258,7 +259,7 @@ async function tryFortunaRevelation(latestSeq: number, chainId: string): Promise
     }
   }
 
-  return null;
+  return { urlStatuses };
 }
 
 // ── Try BaseScan API for recent entropy events ────────────────────────────────
@@ -309,21 +310,51 @@ async function tryBaseScan(): Promise<{
       `https://api.basescan.org/api?module=logs&action=getLogs${logsParams}`,
     ];
 
+    // Try each URL, store individual results so debug shows every attempt
     let json: { status: string; message?: string; result?: unknown } | null = null;
+    const bsAttempts: Array<{ url: string; httpStatus?: number; apiStatus?: string; msg?: string; err?: string }> = [];
     for (const url of urlsToTry) {
-      debug.bsUrl = url.replace(apiKey, "***");
+      const safeUrl = url.replace(apiKey, "***");
+      const attempt: (typeof bsAttempts)[0] = { url: safeUrl };
+      bsAttempts.push(attempt);
       try {
         const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(8000) });
-        debug.bsStatus = res.status;
-        if (!res.ok) { debug.bsErr = `http-${res.status}`; continue; }
+        attempt.httpStatus = res.status;
+        if (!res.ok) { attempt.err = `http-${res.status}`; continue; }
         const candidate = await res.json() as { status: string; message?: string; result?: unknown };
-        debug.bsApiStatus = candidate.status;
-        debug.bsMessage   = candidate.message;
+        attempt.apiStatus = candidate.status;
+        attempt.msg = candidate.message;
         if (candidate.status === "1") { json = candidate; break; }
-        debug.bsErr = candidate.message ?? "notok";
-      } catch (e) { debug.bsErr = String(e).slice(0, 60); }
+        attempt.err = candidate.message ?? "api-notok";
+      } catch (e) { attempt.err = String(e).slice(0, 80); }
     }
-    if (!json) return { result: null, debug };
+    debug.bsAttempts = bsAttempts;
+    // Expose last attempt fields for backwards compat with existing debug readers
+    const last = bsAttempts[bsAttempts.length - 1];
+    if (last) {
+      debug.bsUrl       = last.url;
+      debug.bsStatus    = last.httpStatus;
+      debug.bsApiStatus = last.apiStatus;
+      debug.bsMessage   = last.msg;
+      debug.bsErr       = last.err;
+    }
+    if (!json) {
+      // Secondary: if we have a key, also check if the contract has ANY logs at all
+      // (without data-length filter) to determine if it was ever used
+      if (apiKey) {
+        try {
+          const anyLogsUrl = `https://api.etherscan.io/v2/api?chainid=8453&module=logs&action=getLogs&address=${ENTROPY_CONTRACT}&fromBlock=1&toBlock=latest&page=1&offset=1&sort=desc&apikey=${apiKey}`;
+          const r = await fetch(anyLogsUrl, { signal: AbortSignal.timeout(6000) });
+          if (r.ok) {
+            const j = await r.json() as { status: string; message?: string; result?: unknown[] };
+            debug.bsAnyLogsStatus  = j.status;
+            debug.bsAnyLogsMessage = j.message;
+            debug.bsAnyLogsCount   = Array.isArray(j.result) ? j.result.length : 0;
+          }
+        } catch (e) { debug.bsAnyLogsErr = String(e).slice(0, 60); }
+      }
+      return { result: null, debug };
+    }
 
     if (!Array.isArray(json.result) || json.result.length === 0) {
       debug.bsErr = "empty-result";
@@ -577,9 +608,9 @@ export async function GET(): Promise<NextResponse> {
     const revChainId = seqState?.chainId ?? "base";
     const revSeqNum  = seqState?.sequenceNumber ?? 0;
     const fortunaRev = await tryFortunaRevelation(revSeqNum, revChainId);
-    dbg.fortunaRevUrls = fortunaRev?.urlStatuses ?? [];
-    if (fortunaRev) {
-      revelation = { randomBytes: fortunaRev.randomBytes, revSequence: fortunaRev.revSequence };
+    dbg.fortunaRevUrls = fortunaRev.urlStatuses;
+    if (fortunaRev.randomBytes) {
+      revelation = { randomBytes: fortunaRev.randomBytes, revSequence: fortunaRev.revSequence ?? 0 };
       revMethod  = "fortuna-api";
     }
   }
