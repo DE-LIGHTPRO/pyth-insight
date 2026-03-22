@@ -311,12 +311,14 @@ async function tryBaseScan(): Promise<{
     const logsParams =
       `&address=${ENTROPY_CONTRACT}&fromBlock=${fromBlock}&toBlock=latest&page=1&offset=5&sort=desc`;
     const urlsToTry = apiKey ? [
-      // Etherscan API V2 (new unified API — requires an Etherscan.io account key,
-      // NOT a BaseScan-specific key; get one at https://etherscan.io/myapikey)
-      `https://api.etherscan.io/v2/api?chainid=8453&module=logs&action=getLogs${logsParams}&apikey=${apiKey}`,
-      // Legacy BaseScan fallback (some older keys still work here)
+      // BaseScan's own API — free for Base mainnet, no paid plan needed.
+      // Get a key at https://basescan.org/myapikey (separate from Etherscan.io keys).
       `https://api.basescan.org/api?module=logs&action=getLogs${logsParams}&apikey=${apiKey}`,
+      // Etherscan API V2 — NOTE: requires a PAID Etherscan plan for non-Ethereum chains
+      // (free tier only covers Ethereum mainnet, NOT Base chainid=8453).
+      `https://api.etherscan.io/v2/api?chainid=8453&module=logs&action=getLogs${logsParams}&apikey=${apiKey}`,
     ] : [
+      // No key: narrow range query that BaseScan allows unauthenticated
       `https://api.basescan.org/api?module=logs&action=getLogs${logsParams}`,
     ];
 
@@ -357,7 +359,7 @@ async function tryBaseScan(): Promise<{
       // (without data-length filter) to determine if it was ever used
       if (apiKey) {
         try {
-          const anyLogsUrl = `https://api.etherscan.io/v2/api?chainid=8453&module=logs&action=getLogs&address=${ENTROPY_CONTRACT}&fromBlock=1&toBlock=latest&page=1&offset=1&sort=desc&apikey=${apiKey}`;
+          const anyLogsUrl = `https://api.basescan.org/api?module=logs&action=getLogs&address=${ENTROPY_CONTRACT}&fromBlock=1&toBlock=latest&page=1&offset=1&sort=desc&apikey=${apiKey}`;
           const r = await fetch(anyLogsUrl, { signal: AbortSignal.timeout(6000) });
           if (r.ok) {
             const j = await r.json() as { status: string; message?: string; result?: unknown[] };
