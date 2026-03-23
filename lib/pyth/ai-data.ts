@@ -1,22 +1,21 @@
 /**
- * AI data abstraction layer
- * Tries Pyth MCP Server first, falls back to direct API calls
+ * AI data abstraction layer — live Pyth API integration
+ *
+ * Provides three data tools to the AI Oracle Analyst:
+ *   • get_price              → Hermes /v2/updates/price/latest (live CI + price)
+ *   • get_historical_candles → Pyth Benchmarks OHLCV
+ *   • get_calibration        → pre-computed CI calibration results
  */
 
-// ── MCP path (primary, when server is stable) ────────────────────────────────
-
-async function callViaMCP(tool: string, params: Record<string, unknown>) {
-  // MCP client call — will be wired once MCP Server is confirmed stable
-  // For now, throws to always use the fallback during early hackathon weeks
-  throw new Error("MCP not yet configured — using direct API fallback");
-}
-
-// ── Direct API fallback ───────────────────────────────────────────────────────
-
-const HERMES_URL = "https://hermes.pyth.network";
+const HERMES_URL     = "https://hermes.pyth.network";
 const BENCHMARKS_URL = "https://benchmarks.pyth.network";
 
-async function callDirectAPI(tool: string, params: Record<string, unknown>) {
+// ── Tool dispatch ─────────────────────────────────────────────────────────────
+
+export async function queryPythData(
+  tool: string,
+  params: Record<string, unknown>
+): Promise<unknown> {
   switch (tool) {
     case "get_price": {
       const { priceId } = params as { priceId: string };
@@ -41,7 +40,6 @@ async function callDirectAPI(tool: string, params: Record<string, unknown>) {
     }
 
     case "get_calibration": {
-      // Return pre-computed calibration cache
       const { symbol } = params as { symbol: string };
       const res = await fetch(`/api/calibration?symbol=${encodeURIComponent(symbol)}`);
       return res.json();
@@ -49,30 +47,6 @@ async function callDirectAPI(tool: string, params: Record<string, unknown>) {
 
     default:
       throw new Error(`Unknown tool: ${tool}`);
-  }
-}
-
-// ── Public interface: try MCP, fall back to direct ───────────────────────────
-
-export async function queryPythData(
-  tool: string,
-  params: Record<string, unknown>
-): Promise<unknown> {
-  try {
-    return await callViaMCP(tool, params);
-  } catch {
-    return await callDirectAPI(tool, params);
-  }
-}
-
-// ── MCP status check (shown in UI) ───────────────────────────────────────────
-
-export async function getMCPStatus(): Promise<"connected" | "fallback"> {
-  try {
-    await callViaMCP("ping", {});
-    return "connected";
-  } catch {
-    return "fallback";
   }
 }
 

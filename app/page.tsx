@@ -143,7 +143,7 @@ export default function Home() {
         </p>
 
         <p className="text-sm text-slate-600 max-w-xl mx-auto mb-6">
-          Powered by Pyth Price Feeds · Pyth Benchmarks · Pyth Entropy · Pyth MCP Server
+          Powered by Pyth Price Feeds · Pyth Benchmarks · Pyth Entropy
         </p>
 
         {/* Live oracle attack callout */}
@@ -212,9 +212,9 @@ export default function Home() {
           iconBg="bg-green-950/60"
           iconColor="text-green-400"
           title="AI Oracle Analyst"
-          description="Ask anything about Pyth's price data or calibration results in plain English. Powered by Pyth MCP Server — the AI queries live feeds mid-conversation."
+          description="Ask anything about Pyth's price data or calibration results in plain English. Injected with live prices, CI widths, and anomaly signals from all connected Pyth feeds in real time."
           href="/ai"
-          tag="Pyth MCP Server"
+          tag="Gemini · Claude"
           tagColor="text-green-400"
         />
         <FeatureCard

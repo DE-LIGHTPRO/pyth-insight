@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 export const metadata = {
-  title: "Pyth Benchmarks & Historical Data · Learn · Pyth Insight",
+  title: "Pyth Pro & Benchmarks — Historical Oracle Data · Learn · Pyth Insight",
 };
 
 export default function PythProPage() {
@@ -13,9 +13,9 @@ export default function PythProPage() {
       <div className="flex items-center gap-2 mb-3">
         <span className="text-xs text-emerald-400 font-medium tracking-wide uppercase">Education · 4 min read</span>
       </div>
-      <h1 className="text-3xl font-bold text-white mb-2">Pyth Benchmarks &amp; Historical Data</h1>
+      <h1 className="text-3xl font-bold text-white mb-2">Pyth Pro &amp; Benchmarks — Historical Oracle Data</h1>
       <p className="text-slate-400 text-base mb-10 leading-relaxed">
-        The data layer that powers this app&apos;s calibration analysis — and how developers can use it.
+        How Pyth Benchmarks powers this app&apos;s volatility dashboard and calibration analysis — and how developers can use it.
       </p>
 
       <div className="space-y-8">

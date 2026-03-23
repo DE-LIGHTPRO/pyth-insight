@@ -199,18 +199,45 @@ export default function VolatilityPage() {
         </div>
       </div>
 
-      {/* Loading */}
+      {/* Loading skeleton — mimics the table layout */}
       {loading && (
-        <div className="rounded-xl border border-white/8 bg-[rgb(17,17,25)] p-8 flex flex-col items-center gap-4">
-          <div className="w-10 h-10 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-white font-medium">Fetching Benchmarks OHLCV data…</p>
-          <p className="text-slate-500 text-sm">
-            Loading hourly candles for {Object.keys({}).length || "all"} assets from{" "}
-            <code className="text-slate-400">benchmarks.pyth.network</code>
-          </p>
-          <div className="w-full max-w-md bg-white/5 rounded-full h-1 overflow-hidden">
-            <div className="h-full bg-orange-500 rounded-full animate-pulse w-3/4" />
+        <div className="space-y-4 animate-pulse">
+          {/* Chart skeleton */}
+          <div className="rounded-xl border border-white/8 bg-[rgb(17,17,25)] p-5 h-[340px] flex flex-col gap-3">
+            <div className="h-4 w-48 bg-white/6 rounded" />
+            <div className="h-3 w-72 bg-white/4 rounded" />
+            <div className="flex-1 flex items-end gap-2 pt-4">
+              {Array.from({ length: 17 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="flex-1 bg-orange-900/30 rounded-t"
+                  style={{ height: `${30 + Math.sin(i * 0.8) * 20 + (i % 3) * 10}%` }}
+                />
+              ))}
+            </div>
           </div>
+          {/* Table skeleton */}
+          <div className="rounded-xl border border-white/8 bg-[rgb(17,17,25)] overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-white/6 flex items-center justify-between">
+              <div className="h-4 w-32 bg-white/6 rounded" />
+              <div className="h-3 w-48 bg-white/4 rounded" />
+            </div>
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-4 px-5 py-3.5 border-b border-white/4">
+                <div className="h-3 w-4 bg-white/4 rounded" />
+                <div className="h-3 w-10 bg-white/6 rounded" />
+                <div className="h-3 w-12 bg-white/6 rounded" />
+                <div className="h-3 w-12 bg-white/4 rounded" />
+                <div className="h-3 w-14 bg-white/4 rounded" />
+                <div className="h-5 w-24 bg-white/4 rounded-full" />
+                <div className="h-5 w-16 bg-white/4 rounded-full" />
+                <div className="h-5 w-20 bg-white/3 rounded" />
+              </div>
+            ))}
+          </div>
+          <p className="text-center text-xs text-slate-600 pt-1">
+            Loading hourly candles from <code>benchmarks.pyth.network</code>…
+          </p>
         </div>
       )}
 
@@ -277,52 +304,78 @@ export default function VolatilityPage() {
               <span className="text-sm font-semibold text-white">Detailed Rankings</span>
               <span className="text-xs text-slate-500">Sorted by 7-day RV · highest first</span>
             </div>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/6">
-                  {["#", "Asset", "7d RV", "24h RV", "Vol Trend", "CI/RV Alignment", "Regime", "48h Price"].map((h) => (
-                    <th key={h} className="text-left text-xs text-slate-500 font-medium px-4 py-2.5">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {data.map((a, i) => {
-                  const rs = REGIME_STYLE[a.regime];
-                  return (
-                    <tr key={a.symbol} className="border-b border-white/4 hover:bg-white/2 transition-colors">
-                      <td className="px-4 py-3 text-slate-600 font-mono text-xs">{i + 1}</td>
-                      <td className="px-4 py-3 font-semibold text-white">{a.symbol.split("/")[0]}</td>
-                      <td className="px-4 py-3 font-mono text-white font-medium">{a.rv7d.toFixed(1)}%</td>
-                      <td className="px-4 py-3 font-mono text-slate-400">{a.rv24h.toFixed(1)}%</td>
-                      <td className="px-4 py-3"><TrendBadge trend={a.rvTrend} /></td>
-                      <td className="px-4 py-3">
-                        {a.ciAlignment === "unknown" ? (
-                          <span className="text-xs text-slate-600">—</span>
-                        ) : (
-                          <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border font-medium ${
-                            a.ciAlignment === "tight"   ? "bg-red-950 text-red-400 border-red-700" :
-                            a.ciAlignment === "aligned" ? "bg-emerald-950 text-emerald-400 border-emerald-700" :
-                            "bg-amber-950 text-amber-400 border-amber-700"
-                          }`}>
-                            {a.ciAlignment === "tight"   && "⚠ Over-confident"}
-                            {a.ciAlignment === "aligned" && "✓ Aligned"}
-                            {a.ciAlignment === "wide"    && "Conservative"}
+            {/* overflow-x-auto ensures horizontal scroll on small screens */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[640px]">
+                <thead>
+                  <tr className="border-b border-white/6">
+                    <th className="text-left text-xs text-slate-500 font-medium px-4 py-2.5">#</th>
+                    <th className="text-left text-xs text-slate-500 font-medium px-4 py-2.5">Asset</th>
+                    <th className="text-left text-xs text-slate-500 font-medium px-4 py-2.5">7d RV</th>
+                    <th className="text-left text-xs text-slate-500 font-medium px-4 py-2.5">24h RV</th>
+                    <th className="text-left text-xs text-slate-500 font-medium px-4 py-2.5">Vol Trend</th>
+                    <th className="text-left text-xs text-slate-500 font-medium px-4 py-2.5">
+                      CI/RV Alignment
+                      <span
+                        className="ml-1 text-slate-600 cursor-help"
+                        title="Compares live Hermes CI width (annualized) against 7d realized volatility from Pyth Benchmarks. Feed IDs missing on Hermes show —."
+                      >ⓘ</span>
+                    </th>
+                    <th className="text-left text-xs text-slate-500 font-medium px-4 py-2.5">Regime</th>
+                    <th className="text-left text-xs text-slate-500 font-medium px-4 py-2.5 hidden sm:table-cell">48h Price</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.map((a, i) => {
+                    const rs = REGIME_STYLE[a.regime];
+                    // XRP and any other assets without a Hermes feed ID will always show "—"
+                    // because we can't fetch live CI without a valid price feed ID.
+                    const hasHermesFeedId = Boolean(PRICE_IDS[a.symbol]);
+                    return (
+                      <tr key={a.symbol} className="border-b border-white/4 hover:bg-white/2 transition-colors">
+                        <td className="px-4 py-3 text-slate-600 font-mono text-xs">{i + 1}</td>
+                        <td className="px-4 py-3 font-semibold text-white">{a.symbol.split("/")[0]}</td>
+                        <td className="px-4 py-3 font-mono text-white font-medium">{a.rv7d.toFixed(1)}%</td>
+                        <td className="px-4 py-3 font-mono text-slate-400">{a.rv24h.toFixed(1)}%</td>
+                        <td className="px-4 py-3"><TrendBadge trend={a.rvTrend} /></td>
+                        <td className="px-4 py-3">
+                          {a.ciAlignment === "unknown" ? (
+                            <span
+                              className="text-xs text-slate-600 cursor-help"
+                              title={
+                                hasHermesFeedId
+                                  ? "CI data unavailable — Hermes returned no data for this feed"
+                                  : "Live CI unavailable — Hermes feed ID not found for this asset"
+                              }
+                            >
+                              —
+                            </span>
+                          ) : (
+                            <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border font-medium ${
+                              a.ciAlignment === "tight"   ? "bg-red-950 text-red-400 border-red-700" :
+                              a.ciAlignment === "aligned" ? "bg-emerald-950 text-emerald-400 border-emerald-700" :
+                              "bg-amber-950 text-amber-400 border-amber-700"
+                            }`}>
+                              {a.ciAlignment === "tight"   && "⚠ Over-confident"}
+                              {a.ciAlignment === "aligned" && "✓ Aligned"}
+                              {a.ciAlignment === "wide"    && "Conservative"}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex text-[10px] px-2 py-0.5 rounded-full border font-medium capitalize ${rs.pill}`}>
+                            {rs.label}
                           </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex text-[10px] px-2 py-0.5 rounded-full border font-medium capitalize ${rs.pill}`}>
-                          {rs.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <MiniSparkline closes={a.closes} regime={a.regime} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        </td>
+                        <td className="px-4 py-3 hidden sm:table-cell">
+                          <MiniSparkline closes={a.closes} regime={a.regime} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {/* Interpretation */}

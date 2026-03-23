@@ -33,8 +33,8 @@ const GUIDES = [
     href:  "/learn/pyth-pro",
     color: "text-emerald-400",
     bg:    "bg-emerald-950/40 border-emerald-800/30",
-    title: "Pyth Benchmarks & Historical Data",
-    desc:  "The data layer that powers this app's calibration analysis — and how developers can use it.",
+    title: "Pyth Pro & Benchmarks — Historical Oracle Data",
+    desc:  "How Pyth Benchmarks powers the volatility dashboard and calibration analysis — and how developers can query the full historical price archive.",
     time:  "4 min read",
   },
 ];

@@ -15,10 +15,10 @@ import { formatPrice, formatConf } from "@/lib/pyth/hermes";
 // ── Quick-action prompts shown before / after first message ───────────────────
 
 const QUICK_PROMPTS = [
+  "Are there any CI anomalies in the live feeds right now — and what do they mean?",
+  "Which assets have the biggest EMA deviations right now, and what could cause that?",
+  "If a DeFi protocol used Pyth's CI as a liquidation buffer today, which assets would be most at risk based on the calibration data?",
   "Which crypto feed has the tightest confidence interval right now?",
-  "What does a wide confidence interval mean for a DeFi liquidation engine?",
-  "How does Pyth's CI calibration work and why should protocols care?",
-  "Which assets look most volatile based on live CI data?",
   "Explain the difference between Pyth Hermes and Pyth Benchmarks.",
   "What's EMA price and why does Pyth publish it alongside spot price?",
 ];
@@ -51,10 +51,25 @@ function buildLiveContext(
     metal:  entries.filter((p) => p.assetType === "metal").length,
   };
 
+  // Anomaly detection: feeds whose CI is extreme (>1% of price = very wide)
+  const CI_ANOMALY_THRESHOLD = 1.0; // percent
+  const anomalies = entries.filter((p) => p.confPct > CI_ANOMALY_THRESHOLD);
+
+  // EMA deviation: feeds where price has diverged significantly from EMA
+  const emaDeviation = entries
+    .filter((p) => p.emaPrice && p.price > 0)
+    .map((p) => ({
+      ...p,
+      emaDev: Math.abs((p.price - (p.emaPrice ?? p.price)) / p.price) * 100,
+    }))
+    .filter((p) => p.emaDev > 0.5)
+    .sort((a, b) => b.emaDev - a.emaDev)
+    .slice(0, 5);
+
   const fmt = (p: (typeof entries)[0]) =>
     `  ${p.symbol.padEnd(14)} $${formatPrice(p.price).padStart(14)} CI ±${formatConf(p.confPct).padStart(7)} (${p.assetType})`;
 
-  return [
+  const lines = [
     `Total live feeds: ${entries.length} (crypto: ${byType.crypto}, forex: ${byType.fx}, metals: ${byType.metal})`,
     "",
     "5 tightest CI feeds (most precise right now):",
@@ -62,10 +77,35 @@ function buildLiveContext(
     "",
     "5 widest CI feeds (highest uncertainty right now):",
     ...widest.map(fmt),
+  ];
+
+  if (anomalies.length > 0) {
+    lines.push(
+      "",
+      `⚠ CI ANOMALIES — ${anomalies.length} feed(s) with CI > ${CI_ANOMALY_THRESHOLD}% of price (unusual stress):`,
+      ...anomalies.slice(0, 8).map(fmt)
+    );
+  } else {
+    lines.push("", "No CI anomalies detected (all feeds CI < 1% of price — normal conditions).");
+  }
+
+  if (emaDeviation.length > 0) {
+    lines.push(
+      "",
+      "Top EMA deviations (price has moved away from its recent average):",
+      ...emaDeviation.map(
+        (p) => `  ${p.symbol.padEnd(14)} spot vs EMA: ${p.emaDev.toFixed(3)}% deviation`
+      )
+    );
+  }
+
+  lines.push(
     "",
     `Crypto sample (${crypto.length} total, first 20):`,
-    ...crypto.slice(0, 20).map(fmt),
-  ].join("\n");
+    ...crypto.slice(0, 20).map(fmt)
+  );
+
+  return lines.join("\n");
 }
 
 // ── Message bubble ─────────────────────────────────────────────────────────────

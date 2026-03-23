@@ -5,7 +5,7 @@ import Navbar from "@/components/Navbar";
 export const metadata: Metadata = {
   title: "Pyth Insight — Oracle Intelligence Platform",
   description:
-    "The first platform to publicly measure whether Pyth's confidence intervals are statistically accurate. Built on Pyth Price Feeds, Benchmarks, Entropy, and the Pyth MCP Server.",
+    "The first platform to publicly measure whether Pyth's confidence intervals are statistically accurate. Built on Pyth Price Feeds, Benchmarks, and Entropy.",
   keywords: ["Pyth", "oracle", "DeFi", "confidence interval", "calibration", "blockchain"],
   openGraph: {
     title: "Pyth Insight",

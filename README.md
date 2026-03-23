@@ -18,7 +18,7 @@ Pyth Insight turns raw oracle data into actionable intelligence. It is not a pri
 
 **Volatility Dashboard** — Realized volatility rankings across tracked assets, computed from historical hourly prices. Shows 24h vs 7d RV with trend direction and vol regime classification (low / medium / high / extreme).
 
-**Oracle Challenge (Game)** — An Entropy-powered prediction game. Each 30-second round, the Pyth Entropy sequence number on Base (Fortuna provider) is combined with the actual block hash and a minute-bucket to derive a deterministic seed — selecting one of 12 live Pyth feeds. Players bet whether the next price will land inside or outside Pyth's real-time CI. The seed formula and Basescan block hash link are shown so anyone can verify the result was not manipulated.
+**Oracle Challenge (Game)** — A provably fair prediction game seeded by live Pyth oracle data. Each round, the API attempts the full Pyth Entropy pipeline — Fortuna REST API → BaseScan event index → `eth_getLogs` on the Entropy contract (`0x98046Bd286715D3B0BC227Dd7a956b83D8978603`) — then falls back to a live Pyth Hermes BTC/USD oracle attestation, packing `price | conf | ema_price | publish_time` into a 32-byte seed signed by Pyth validators. The game shows a "✓ Real Entropy" badge with the entropy source and seed formula displayed, so anyone can verify the round seed by re-querying Hermes. Players bet whether the next Pyth price lands inside or outside the live CI.
 
 **AI Oracle Analyst** — Streaming chat interface powered by Gemini (with Claude fallback) injected with a live snapshot of all connected Pyth feeds, so it can answer questions about what is happening on-chain right now.
 
@@ -31,10 +31,11 @@ Pyth Insight turns raw oracle data into actionable intelligence. It is not a pri
 | Full feed catalogue (dynamic) | Hermes REST (`/v2/price_feeds`) |
 | Live price polling (3s batches) | Hermes REST (`/v2/updates/price/latest`) |
 | Historical calibration snapshots | Hermes REST (`/v2/updates/price/{timestamp}`) |
-| Entropy seed / randomness | Pyth Fortuna on Base + `eth_getBlockByNumber` RPC |
+| Volatility + sparkline candles | **Pyth Benchmarks** (`benchmarks.pyth.network/v1/shims/tradingview/history`) |
+| Entropy seed / randomness | Pyth Entropy contract on Base (full event pipeline) + Pyth Hermes BTC/USD attestation fallback |
 | Feed metadata & SDK | `@pythnetwork/hermes-client` |
 
-All feed IDs are sourced dynamically from Hermes at runtime — no hardcoded ID lists.
+All feed IDs are sourced dynamically from Hermes at runtime — no hardcoded ID lists. The Volatility Dashboard and all sparkline charts are powered by the [Pyth Benchmarks API](https://benchmarks.pyth.network), using the TradingView-compatible OHLCV endpoint.
 
 ---
 
@@ -53,19 +54,29 @@ All feed IDs are sourced dynamically from Hermes at runtime — no hardcoded ID 
 ## Running Locally
 
 ```bash
+git clone https://github.com/DE-LIGHTPRO/pyth-insight
+cd pyth-insight
 npm install
+cp .env.example .env.local   # fill in any keys you want (see below)
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
 
-No API keys required for price feeds — Pyth Hermes is public. For the AI Analyst, add a Gemini or Anthropic key:
+### Environment Variables
 
-```bash
-# .env.local
-GEMINI_API_KEY=AIza...        # Google AI Studio — free tier works
-ANTHROPIC_API_KEY=sk-ant-...  # optional — used if set, Gemini otherwise
-```
+Copy `.env.example` to `.env.local`. All keys are optional except for the AI Analyst:
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `GEMINI_API_KEY` | For AI Analyst | Google AI Studio — free tier works |
+| `ANTHROPIC_API_KEY` | Optional | Claude fallback for AI Analyst |
+| `PYTH_PRO_API_KEY` | Optional | Enables Pyth Benchmarks fallback in calibration |
+| `ALCHEMY_RPC_URL` | Optional | Wider block range for Entropy event queries on Base |
+| `BASESCAN_API_KEY` | Optional | Entropy contract event index (free at basescan.org) |
+| `NEXT_PUBLIC_GITHUB_URL` | Optional | GitHub link shown in the navbar |
+
+**Price feeds, calibration, volatility, and the game all run without any API key** — Pyth Hermes and Benchmarks APIs are public.
 
 ---
 
@@ -93,9 +104,9 @@ lib/
 
 ## Hackathon
 
-Built for the [Pyth Playground Hackathon](https://pyth.network) — Round 1 (March 4 – April 1, 2026).
+Built for the [Pyth Playground Community Hackathon](https://forum.pyth.network/t/pyth-playground-community-hackathon/2363) — March 4 – April 1, 2026.
 
-Prize tracks: Top placement · Best Educational Content · Community Choice
+Prize tracks targeted: Top placement · Most Creative Pyth Pro Use · Best Promotional/Educational Content · Community Choice
 
 ---
 
