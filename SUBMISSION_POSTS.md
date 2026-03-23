@@ -50,7 +50,7 @@ https://github.com/DE-LIGHTPRO/pyth-insight
 
 ### Answer Capsule
 
-Pyth Insight uses Pyth Price Feeds (live + historical Hermes API) to empirically test whether published confidence intervals hold up statistically across 1,687+ feeds, and Pyth Hermes BTC/USD oracle attestations as a verifiable entropy source for a provably fair prediction game. The seed is a signed Pyth oracle value, independently verifiable at hermes.pyth.network.
+Pyth Insight uses Pyth Price Feeds (live + historical Hermes API) to empirically test whether published confidence intervals hold up statistically across 1,687+ feeds, Pyth Benchmarks OHLCV data to compute realized volatility and a novel CI/RV alignment score, and Pyth Hermes BTC/USD oracle attestations as a verifiable entropy source for a provably fair prediction game.
 
 ### Tech stack
 - Next.js 15 App Router, TypeScript (strict), Tailwind CSS, Recharts
@@ -329,15 +329,35 @@ Happy to answer questions about the calibration methodology or the oracle entrop
 
 ---
 
-> **Pre-submission checklist:**
-> - [x] GitHub username set to DE-LIGHTPRO ✓
-> - [ ] Fill in `[YOUR-DISCORD]` with your Discord handle
-> - [ ] Fill in `[YOUR-WALLET]` with your EVM wallet address
-> - [ ] Attach 3 screenshots to the forum post: Calibration page, Game page (showing "✓ Real Entropy" badge), AI Analyst
-> - [ ] Verify Answer Capsule is 40-60 words ← current version is ~54 words ✓
-> - [ ] Post Forum post first (required for valid submission)
-> - [ ] Post Dev.to article (required content creation — copy Section 2 above)
-> - [ ] Create GitHub Gist (required technical contribution — copy Section 3 above)
-> - [ ] Link both in the forum post under Content Contributions
-> - [ ] Verify pyth-insight.vercel.app is live and Entropy game shows "✓ Real Entropy" badge ✓
-> - [ ] Record 2-minute demo video and add to forum post
+> **Pre-submission checklist — 9 days left (deadline April 1, 2026)**
+>
+> **Code — all done ✓**
+> - [x] pyth-insight.vercel.app live and loading ✓
+> - [x] CI/RV Alignment shows ⚠ Over-confident badges for 16/17 assets ✓
+> - [x] Entropy game shows "✓ Real Entropy" badge ✓
+> - [x] Apache 2.0 LICENSE file in repo ✓
+> - [x] Answer Capsule is 55 words (within 40–60) ✓ — mentions Hermes, Benchmarks, Entropy
+> - [x] Removed misleading "Pyth MCP Server" references ✓
+> - [x] Volatility page: loading skeleton, mobile scroll, XRP tooltip ✓
+> - [x] Navbar: mobile hamburger menu ✓
+> - [x] TypeScript strict mode: 0 errors ✓
+>
+> **Still to do — in order:**
+> - [ ] **STEP 1:** Fill in `[YOUR-DISCORD]` and `[YOUR-WALLET]` in this file
+> - [ ] **STEP 2:** Take screenshots (minimum 3):
+>   - Calibration page — coverage chart + health scores
+>   - Volatility page — CI/RV alignment badges
+>   - Game page — "✓ Real Entropy" badge visible
+>   - AI Analyst (bonus 4th screenshot)
+> - [ ] **STEP 3:** Record a 2-minute Loom/screen recording demo walkthrough (strongly advised)
+> - [ ] **STEP 4:** Post Dev.to article (Section 2 above) → copy the URL
+> - [ ] **STEP 5:** Create GitHub Gist (Section 3 above) → copy the URL
+> - [ ] **STEP 6:** Post forum submission (Section 1 above) — add screenshots, Dev.to URL, Gist URL
+> - [ ] **STEP 7:** Submit via GitHub form (link in hackathon forum post) with the forum post URL
+> - [ ] **STEP 8 (bonus):** Post Reddit post (Section 4) in r/defi — 100 upvotes = +5,000 PYTH
+>
+> **Prize tracks to mention in forum post:**
+> - Top placement (1st: 50k · 2nd: 30k · 3rd: 15k PYTH)
+> - Most Creative Pyth Pro Use — CI/RV Alignment via Pyth Benchmarks (10k PYTH)
+> - Best Promotional/Educational Content — Learn section + Dev.to + Gist (10k PYTH)
+> - Community Choice — Reddit upvotes drive this (10k PYTH)
