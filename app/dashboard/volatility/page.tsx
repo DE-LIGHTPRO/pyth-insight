@@ -176,14 +176,27 @@ export default function VolatilityPage() {
             crypto assets — computed from Benchmarks hourly OHLCV data.
           </p>
         </div>
-        <a
-          href="https://benchmarks.pyth.network"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-xs text-orange-400 hover:text-orange-300 transition-colors mt-1"
-        >
-          Pyth Benchmarks API →
-        </a>
+        <div className="flex items-center gap-4 mt-1">
+          <button
+            onClick={load}
+            disabled={loading}
+            className="flex items-center gap-2 text-xs px-3 py-1.5 rounded-lg border border-orange-700/60 bg-orange-950/30 text-orange-400 hover:bg-orange-950/60 hover:text-orange-300 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+          >
+            <svg className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M13.5 8A5.5 5.5 0 1 1 8 2.5" strokeLinecap="round"/>
+              <path d="M13.5 2.5v3h-3" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            {loading ? "Refreshing…" : "Refresh"}
+          </button>
+          <a
+            href="https://benchmarks.pyth.network"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-orange-400 hover:text-orange-300 transition-colors"
+          >
+            Pyth Benchmarks API →
+          </a>
+        </div>
       </div>
 
       {/* Loading */}
