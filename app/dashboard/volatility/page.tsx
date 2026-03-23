@@ -112,9 +112,15 @@ export default function VolatilityPage() {
         const ciRes  = await fetch(
           `https://hermes.pyth.network/v2/updates/price/latest?${params}&parsed=true`
         );
+        console.log("[CI] Hermes response status:", ciRes.status, ciRes.statusText);
+        if (!ciRes.ok) {
+          const errBody = await ciRes.text().catch(() => "(unreadable)");
+          console.error("[CI] Non-OK body:", errBody);
+        }
         if (ciRes.ok) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const ciData = (await ciRes.json()) as { parsed?: any[] };
+          console.log("[CI] parsed entries:", ciData.parsed?.length ?? 0, "sample:", ciData.parsed?.[0]?.id);
           const ciWidths: Record<string, number> = {};
           for (const p of ciData.parsed ?? []) {
             const rawId = (p.id as string).replace(/^0x/, "");
@@ -139,8 +145,8 @@ export default function VolatilityPage() {
             }) ?? null
           );
         }
-      } catch {
-        // CI data is optional — RV data already displayed, leave "—"
+      } catch (err) {
+        console.error("[CI] Hermes fetch threw:", err);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load volatility data");
