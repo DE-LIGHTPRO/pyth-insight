@@ -11,6 +11,7 @@ import {
   Tooltip, ResponsiveContainer, Cell,
 } from "recharts";
 import type { AssetVolatility, VolRegime } from "@/app/api/volatility/route";
+import { PRICE_IDS, BENCHMARKS_SYMBOLS, ID_TO_SYMBOL } from "@/lib/pyth/price-ids";
 
 function ciAlignmentVerdict(ratio: number): AssetVolatility["ciAlignment"] {
   if (ratio <= 0)   return "unknown";
@@ -99,12 +100,34 @@ export default function VolatilityPage() {
       const rvData = json as AssetVolatility[];
       setData(rvData);
 
-      // Fetch CI widths from the dedicated lightweight endpoint (separate lambda,
-      // no connection contention with the 17 Benchmarks requests above).
+      // Fetch CI widths directly from Hermes in the browser.
+      // Vercel serverless cannot reach hermes.pyth.network from server-side routes,
+      // but the browser can — same pattern the Live Feeds page uses for SSE.
+      // NOTE: must use manual ids[] format — Hermes rejects percent-encoded %5B%5D.
       try {
-        const ciRes = await fetch("/api/ci-widths");
+        const benchIds = (Object.keys(BENCHMARKS_SYMBOLS) as string[])
+          .map((s) => PRICE_IDS[s]?.replace(/^0x/, ""))
+          .filter((id): id is string => Boolean(id));
+        const params = benchIds.map((id) => `ids[]=${id}`).join("&");
+        const ciRes  = await fetch(
+          `https://hermes.pyth.network/v2/updates/price/latest?${params}&parsed=true`
+        );
         if (ciRes.ok) {
-          const ciWidths = await ciRes.json() as Record<string, number>;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const ciData = (await ciRes.json()) as { parsed?: any[] };
+          const ciWidths: Record<string, number> = {};
+          for (const p of ciData.parsed ?? []) {
+            const rawId = (p.id as string).replace(/^0x/, "");
+            const sym   = ID_TO_SYMBOL[rawId];
+            if (!sym) continue;
+            const expo  = p.price.expo as number;
+            const scale = Math.pow(10, expo);
+            const price = Math.abs(Number(p.price.price) * scale);
+            const conf  = Number(p.price.conf)  * scale;
+            if (price > 0) {
+              ciWidths[sym] = parseFloat(((conf / price) * Math.sqrt(8760) * 100).toFixed(4));
+            }
+          }
           setData((prev) =>
             prev?.map((a) => {
               const ciWidthPct = ciWidths[a.symbol] ?? 0;
@@ -117,7 +140,7 @@ export default function VolatilityPage() {
           );
         }
       } catch {
-        // CI data is optional — main RV data already displayed, just leave "—"
+        // CI data is optional — RV data already displayed, leave "—"
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load volatility data");
