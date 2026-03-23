@@ -23,7 +23,10 @@ export const PRICE_IDS: Record<string, string> = {
   "SNX/USD":   "0x39d020f60982ed892abbcd4a06a276a9f9b7bfbce003204c110b6e488f502da3",
   "DOGE/USD":  "0xdcef50dd0a4cd2dcc17e45df1676dcb336a11a61c69df7a0299b0150c672d25c",
   "LTC/USD":   "0x6e3f3fa8253588df9326580180233eb791e03b443a3ba7a1d892e73874e19a54",
-  "XRP/USD":   "0xbec1d1bb88a3bb7888f9a29d7c70cefbe37ed7b2f0ebd955f91b1b4e9d3a5b42",
+  // XRP/USD feed ID 0xbec1d1bb… returns 404 on Hermes (deprecated) — removed until
+  // the correct 64-char ID can be re-verified via pyth.network/price-feeds.
+  // Benchmarks still works (uses symbol names, not IDs).
+  // "XRP/USD": "0xbec1d1bb88a3bb7888f9a29d7c70cefbe37ed7b2f0ebd955f91b1b4e9d3a5b42",
   "ADA/USD":   "0x2a01deaec9e51a579277b34b122399984d0bbf57e2458a7e42fecd2829867a0d",
   "DOT/USD":   "0xca3eed9b267293f6595901c734c7525ce8ef49adafe8284606ceb307afa2ca5b",
   "ATOM/USD":  "0xb00b60f88b03a6a625a8d1c048c3f66653edf217439983d037e7222c4e612819",
