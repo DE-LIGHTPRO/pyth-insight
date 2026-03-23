@@ -12,6 +12,13 @@ import {
 } from "recharts";
 import type { AssetVolatility, VolRegime } from "@/app/api/volatility/route";
 
+function ciAlignmentVerdict(ratio: number): AssetVolatility["ciAlignment"] {
+  if (ratio <= 0)   return "unknown";
+  if (ratio < 0.5)  return "tight";
+  if (ratio < 1.5)  return "aligned";
+  return "wide";
+}
+
 // ── Regime styling ─────────────────────────────────────────────────────────────
 
 const REGIME_STYLE: Record<VolRegime, { pill: string; bar: string; label: string }> = {
@@ -89,7 +96,29 @@ export default function VolatilityPage() {
       const res  = await fetch("/api/volatility");
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? `Server error ${res.status}`);
-      setData(json as AssetVolatility[]);
+      const rvData = json as AssetVolatility[];
+      setData(rvData);
+
+      // Fetch CI widths from the dedicated lightweight endpoint (separate lambda,
+      // no connection contention with the 17 Benchmarks requests above).
+      try {
+        const ciRes = await fetch("/api/ci-widths");
+        if (ciRes.ok) {
+          const ciWidths = await ciRes.json() as Record<string, number>;
+          setData((prev) =>
+            prev?.map((a) => {
+              const ciWidthPct = ciWidths[a.symbol] ?? 0;
+              const ciRvRatio  =
+                a.rv7d > 0 && ciWidthPct > 0
+                  ? parseFloat((ciWidthPct / a.rv7d).toFixed(3))
+                  : 0;
+              return { ...a, ciWidthPct, ciRvRatio, ciAlignment: ciAlignmentVerdict(ciRvRatio) };
+            }) ?? null
+          );
+        }
+      } catch {
+        // CI data is optional — main RV data already displayed, just leave "—"
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load volatility data");
     } finally {
@@ -215,7 +244,7 @@ export default function VolatilityPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-white/6">
-                  {["#", "Asset", "7d RV", "24h RV", "Vol Trend", "Regime", "48h Price"].map((h) => (
+                  {["#", "Asset", "7d RV", "24h RV", "Vol Trend", "CI/RV Alignment", "Regime", "48h Price"].map((h) => (
                     <th key={h} className="text-left text-xs text-slate-500 font-medium px-4 py-2.5">{h}</th>
                   ))}
                 </tr>
@@ -230,6 +259,21 @@ export default function VolatilityPage() {
                       <td className="px-4 py-3 font-mono text-white font-medium">{a.rv7d.toFixed(1)}%</td>
                       <td className="px-4 py-3 font-mono text-slate-400">{a.rv24h.toFixed(1)}%</td>
                       <td className="px-4 py-3"><TrendBadge trend={a.rvTrend} /></td>
+                      <td className="px-4 py-3">
+                        {a.ciAlignment === "unknown" ? (
+                          <span className="text-xs text-slate-600">—</span>
+                        ) : (
+                          <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border font-medium ${
+                            a.ciAlignment === "tight"   ? "bg-red-950 text-red-400 border-red-700" :
+                            a.ciAlignment === "aligned" ? "bg-emerald-950 text-emerald-400 border-emerald-700" :
+                            "bg-amber-950 text-amber-400 border-amber-700"
+                          }`}>
+                            {a.ciAlignment === "tight"   && "⚠ Over-confident"}
+                            {a.ciAlignment === "aligned" && "✓ Aligned"}
+                            {a.ciAlignment === "wide"    && "Conservative"}
+                          </span>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex text-[10px] px-2 py-0.5 rounded-full border font-medium capitalize ${rs.pill}`}>
                           {rs.label}
@@ -256,8 +300,11 @@ export default function VolatilityPage() {
                 Realized Volatility (RV) measures how much an asset&apos;s price actually moved, expressed as
                 an <span className="text-white">annualized percentage</span> computed from hourly log returns
                 via Pyth Benchmarks. When <span className="text-red-400">24h RV {">"} 7d RV</span>, short-term
-                volatility is rising — Pyth&apos;s CI bands typically widen in response. DeFi protocols use these
-                signals to dynamically adjust liquidation thresholds.
+                volatility is rising. The <span className="text-white">CI/RV Alignment</span> column compares
+                Pyth&apos;s live confidence interval width against realized volatility —
+                <span className="text-red-400"> ⚠ Over-confident</span> means Pyth&apos;s CI is tighter than
+                actual price movement (risky for DeFi liquidation engines);
+                <span className="text-emerald-400"> ✓ Aligned</span> means CI matches realized vol well.
               </div>
             </div>
           </div>
